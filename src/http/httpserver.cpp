@@ -132,6 +132,8 @@ void HttpServer::handleStart(QTcpSocket* s, const Request& r) {
     }
 
     const bool ok = n->start(extra);
+
+    qDebug()<<"ok: "<<ok;
     QJsonObject out{ {"ok", ok}, {"status", n->statusJson()} };
     writeJson(s, ok ? 200 : 500, out);
 }

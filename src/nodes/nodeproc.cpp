@@ -37,19 +37,40 @@ void NodeProc::appendLog(const QByteArray& chunk) {
     emit logUpdated(m_id);
 }
 
-bool NodeProc::start(const QStringList& extraArgs) {
-    QWriteLocker g(&m_lock);
-    if (m_proc.state() != QProcess::NotRunning) return true;
-    if (m_program.isEmpty()) return false;
-    QStringList args = m_defaultArgs;
+bool NodeProc::start(const QStringList& extraArgs)
+{
+    // 1) Schnell prüfen, ohne lange zu halten
+    {
+        QWriteLocker g(&m_lock);
+        if (m_proc.state() != QProcess::NotRunning) return true;
+        if (m_program.isEmpty()) return false;
+    }
+
+    // 2) Args außerhalb des Locks bauen + Hook aufrufen
+    QStringList args;
+    {
+        QReadLocker r(&m_lock);
+        args = m_defaultArgs;
+    }
     if (!extraArgs.isEmpty()) args += extraArgs;
     beforeStart(args);
+
+    // 3) Start OHNE gehaltenen m_lock
     m_proc.setProcessChannelMode(QProcess::MergedChannels);
-    m_proc.start(m_program, args, QIODevice::ReadOnly);
-    return m_proc.waitForStarted(3000);
+    m_proc.start(m_program, args, QIODevice::ReadWrite);
+
+    // 4) warten ebenfalls OHNE Lock
+    if (!m_proc.waitForStarted(10000)) {
+        // Fallback: trotzdem Running?
+        return m_proc.state() == QProcess::Running;
+    }
+    return true;
 }
 
+
 bool NodeProc::stop(int gracefulMs) {
+
+    qDebug()<<"stop start...";
     QWriteLocker g(&m_lock);
     if (m_proc.state() == QProcess::NotRunning) return true;
     m_proc.terminate();
@@ -57,6 +78,8 @@ bool NodeProc::stop(int gracefulMs) {
         m_proc.kill();
         return m_proc.waitForFinished(3000);
     }
+
+    qDebug()<<"stop end...";
     return true;
 }
 

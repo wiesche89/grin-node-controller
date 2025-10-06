@@ -86,6 +86,9 @@ int main(int argc, char *argv[]) {
     if (!rustArgs.isEmpty()) rust.setDefaultArgs(rustArgs);
     if (!gppArgs.isEmpty())  grinpp.setDefaultArgs(gppArgs);
 
+
+    qDebug()<<"args main: "<<rust.defaultArgs();
+
     rust.setLogCapacity(logCap);
     grinpp.setLogCapacity(logCap);
 
