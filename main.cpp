@@ -1,56 +1,62 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QCommandLineOption>
-#include <QDebug>
 
-#include "src/http/httpserver.h"
-#include "src/nodes/grinrustnode.h"
-#include "src/nodes/grinppnode.h"
+#include "httpserver.h"
+#include "grinrustnode.h"
+#include "grinppnode.h"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
+    // -------------------------------------------------------------------------------------------------------
+    // Setting Application
+    // -------------------------------------------------------------------------------------------------------
     QCoreApplication app(argc, argv);
-    QCoreApplication::setApplicationName("GrinHttpCtl");
-    QCoreApplication::setApplicationVersion("1.0");
+    QCoreApplication::setApplicationName("grin-node-controller");
+    QCoreApplication::setApplicationVersion("0.0.1");
 
-    // --- CLI Parser ---
+    // -------------------------------------------------------------------------------------------------------
+    // CLI Parser
+    // Windows cmd args: --port 8080 --rust-bin C:/grin/grin/grin.exe --grinpp-bin C:/grin/grin/grinnode.exe
+    // -------------------------------------------------------------------------------------------------------
     QCommandLineParser p;
-    p.setApplicationDescription("HTTP Controller fuer Grin Rust Node und Grin++");
+    p.setApplicationDescription("Grin Node Controller for Grin Rust Node and Grin++");
     p.addHelpOption();
     p.addVersionOption();
 
     QCommandLineOption optPort(
         QStringList() << "p" << "port",
-        "HTTP Port (default 8080)",
-        "port",
-        "8080"
+            "HTTP Port (default 8080)",
+            "port",
+            "8080"
         );
     QCommandLineOption optRustBin(
         "rust-bin",
-        "Pfad zur Grin Rust Node",
+        "Path to Grin Rust Node",
         "path",
         qEnvironmentVariable("GRIN_RUST_BIN")
         );
     QCommandLineOption optRustArg(
         "rust-args",
-        "Default-Args Rust (kommagetrennt)",
+        "Default-Args Rust",
         "list",
         qEnvironmentVariable("GRIN_RUST_ARGS")
         );
     QCommandLineOption optGppBin(
         "grinpp-bin",
-        "Pfad zu Grin++",
+        "Path to Grin++",
         "path",
         qEnvironmentVariable("GRINPP_BIN")
         );
     QCommandLineOption optGppArg(
         "grinpp-args",
-        "Default-Args Grin++ (kommagetrennt)",
+        "Default-Args Grin++",
         "list",
         qEnvironmentVariable("GRINPP_ARGS")
         );
     QCommandLineOption optLogCap(
         "log-cap",
-        "Logpuffer-Zeilenzahl (default 5000)",
+        "Logpuffer (default 5000)",
         "n",
         "5000"
         );
@@ -63,7 +69,9 @@ int main(int argc, char *argv[]) {
     p.addOption(optLogCap);
     p.process(app);
 
-    // --- Optionen auslesen / validieren ---
+    // -------------------------------------------------------------------------------------------------------
+    // Option validation
+    // -------------------------------------------------------------------------------------------------------
     bool okPort = false;
     const int portVal = p.value(optPort).toInt(&okPort);
     const quint16 port = (okPort && portVal > 0 && portVal <= 65535) ? quint16(portVal) : quint16(8080);
@@ -73,39 +81,51 @@ int main(int argc, char *argv[]) {
     const int logCap = (okCap && capVal > 0) ? capVal : 5000;
 
     const QString rustBin = p.value(optRustBin);
-    const QString gppBin  = p.value(optGppBin);
+    const QString gppBin = p.value(optGppBin);
     const QStringList rustArgs = p.value(optRustArg).split(',', Qt::SkipEmptyParts);
-    const QStringList gppArgs  = p.value(optGppArg).split(',', Qt::SkipEmptyParts);
+    const QStringList gppArgs = p.value(optGppArg).split(',', Qt::SkipEmptyParts);
 
-    // --- Nodes konfigurieren ---
+    // -------------------------------------------------------------------------------------------------------
+    // Nodes configuration
+    // -------------------------------------------------------------------------------------------------------
     GrinRustNode rust;
-    GrinPPNode   grinpp;
+    GrinPPNode grinpp;
 
-    if (!rustBin.isEmpty())  rust.setProgram(rustBin);
-    if (!gppBin.isEmpty())   grinpp.setProgram(gppBin);
-    if (!rustArgs.isEmpty()) rust.setDefaultArgs(rustArgs);
-    if (!gppArgs.isEmpty())  grinpp.setDefaultArgs(gppArgs);
-
-
-    qDebug()<<"args main: "<<rust.defaultArgs();
-
+    if (!rustBin.isEmpty()) {
+        rust.setProgram(rustBin);
+    }
+    if (!gppBin.isEmpty()) {
+        grinpp.setProgram(gppBin);
+    }
+    if (!rustArgs.isEmpty()) {
+        rust.setDefaultArgs(rustArgs);
+    }
+    if (!gppArgs.isEmpty()) {
+        grinpp.setDefaultArgs(gppArgs);
+    }
     rust.setLogCapacity(logCap);
     grinpp.setLogCapacity(logCap);
 
-    // --- HTTP Server starten ---
+    // -------------------------------------------------------------------------------------------------------
+    // HTTP Server start
+    // -------------------------------------------------------------------------------------------------------
     HttpServer http;
     http.registerNode(&rust);
     http.registerNode(&grinpp);
 
     if (!http.listen(port)) {
-        qCritical().noquote() << QString("HTTP Server konnte Port %1 nicht binden.").arg(port);
+        qCritical().noquote() << QString("HTTP server could not bind to port %1.").arg(port);
         return 1;
     }
 
-    qInfo().noquote() << QString("[i] HTTP Server lauscht auf http://0.0.0.0:%1").arg(port);
-    qInfo().noquote() << QString("[i] Log-Capacity: %1 Zeilen").arg(logCap);
-    if (!rustBin.isEmpty()) qInfo().noquote() << QString("[i] Rust Node:  %1").arg(rustBin);
-    if (!gppBin.isEmpty())  qInfo().noquote() << QString("[i] Grin++:     %1").arg(gppBin);
+    qInfo().noquote() << QString("[i] HTTP server listens on http://0.0.0.0:%1").arg(port);
+    qInfo().noquote() << QString("[i] Log-Capacity: %1 rows").arg(logCap);
+    if (!rustBin.isEmpty()) {
+        qInfo().noquote() << QString("[i] Rust Node:  %1").arg(rustBin);
+    }
+    if (!gppBin.isEmpty()) {
+        qInfo().noquote() << QString("[i] Grin++:     %1").arg(gppBin);
+    }
 
     return app.exec();
 }

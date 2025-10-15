@@ -1,42 +1,73 @@
 #include "httpserver.h"
 
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QUrl>
-#include <QUrlQuery>
-#include <QRegularExpression>
-#include <QScopedPointer>
-
-static inline QByteArray httpStatusLine(int code) {
+/**
+ * @brief httpStatusLine
+ * @param code
+ * @return
+ */
+static inline QByteArray httpStatusLine(int code)
+{
     // Minimal mapping
     switch (code) {
-    case 200: return "HTTP/1.1 200 OK\r\n";
-    case 204: return "HTTP/1.1 204 No Content\r\n";
-    case 400: return "HTTP/1.1 400 Bad Request\r\n";
-    case 404: return "HTTP/1.1 404 Not Found\r\n";
-    case 500: return "HTTP/1.1 500 Internal Server Error\r\n";
-    default:  return QByteArray("HTTP/1.1 ") + QByteArray::number(code) + " OK\r\n";
+    case 200:
+        return "HTTP/1.1 200 OK\r\n";
+    case 204:
+        return "HTTP/1.1 204 No Content\r\n";
+    case 400:
+        return "HTTP/1.1 400 Bad Request\r\n";
+    case 404:
+        return "HTTP/1.1 404 Not Found\r\n";
+    case 500:
+        return "HTTP/1.1 500 Internal Server Error\r\n";
+    default:
+        return QByteArray("HTTP/1.1 ") + QByteArray::number(code) + " OK\r\n";
     }
 }
 
-HttpServer::HttpServer(QObject* parent) : QObject(parent) {
+/**
+ * @brief HttpServer::HttpServer
+ * @param parent
+ */
+HttpServer::HttpServer(QObject *parent) : QObject(parent)
+{
     connect(&m_server, &QTcpServer::newConnection, this, &HttpServer::onNewConnection);
 }
 
-void HttpServer::registerNode(INodeController* node) {
-    if (!node) return;
+/**
+ * @brief HttpServer::registerNode
+ * @param node
+ */
+void HttpServer::registerNode(INodeController *node)
+{
+    if (!node) {
+        return;
+    }
     m_nodes.insert(node->id(), node);
 }
 
-bool HttpServer::listen(quint16 port, const QHostAddress& addr) {
+/**
+ * @brief HttpServer::listen
+ * @param port
+ * @param addr
+ * @return
+ */
+bool HttpServer::listen(quint16 port, const QHostAddress &addr)
+{
     return m_server.listen(addr, port);
 }
 
-void HttpServer::onNewConnection() {
-    while (QTcpSocket* s = m_server.nextPendingConnection()) {
+/**
+ * @brief HttpServer::onNewConnection
+ */
+void HttpServer::onNewConnection()
+{
+    while (QTcpSocket *s = m_server.nextPendingConnection()) {
         s->setParent(this);
+
         Request r;
-        if (!readHttpRequest(s, r)) {
+        bool ok = readHttpRequest(s, r);
+
+        if (!ok) {
             writeBadRequest(s);
             s->disconnectFromHost();
             continue;
@@ -46,25 +77,31 @@ void HttpServer::onNewConnection() {
     }
 }
 
-// ---------------- Routing ----------------
-
-void HttpServer::routeRequest(QTcpSocket* s, const Request& r) {
+/**
+ * @brief HttpServer::routeRequest
+ * @param s
+ * @param r
+ */
+void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
+{
     // CORS preflight
     if (r.method == "OPTIONS") {
         handleOptions(s, r);
         return;
     }
 
-    // Normalisiere Pfad (ohne trailing slash, außer root)
+    // normalize path (without trailing slash, root)
     QByteArray path = r.path;
-    if (path.size() > 1 && path.endsWith('/')) path.chop(1);
+    if (path.size() > 1 && path.endsWith('/')) {
+        path.chop(1);
+    }
 
     if (r.method == "GET" && path == "/status") {
         handleStatus(s);
         return;
     }
 
-    // /start/{id} (POST)
+    ///start/{id} (POST)
     if (r.method == "POST" && path.startsWith("/start/")) {
         Request r2 = r;
         r2.idParam = QString::fromUtf8(path.mid(sizeof("/start/") - 1));
@@ -72,7 +109,7 @@ void HttpServer::routeRequest(QTcpSocket* s, const Request& r) {
         return;
     }
 
-    // /stop/{id} (POST)
+    ///stop/{id} (POST)
     if (r.method == "POST" && path.startsWith("/stop/")) {
         Request r2 = r;
         r2.idParam = QString::fromUtf8(path.mid(sizeof("/stop/") - 1));
@@ -80,7 +117,7 @@ void HttpServer::routeRequest(QTcpSocket* s, const Request& r) {
         return;
     }
 
-    // /restart/{id} (POST)
+    ///restart/{id} (POST)
     if (r.method == "POST" && path.startsWith("/restart/")) {
         Request r2 = r;
         r2.idParam = QString::fromUtf8(path.mid(sizeof("/restart/") - 1));
@@ -88,7 +125,7 @@ void HttpServer::routeRequest(QTcpSocket* s, const Request& r) {
         return;
     }
 
-    // /logs/{id} (GET)
+    ///logs/{id} (GET)
     if (r.method == "GET" && path.startsWith("/logs/")) {
         Request r2 = r;
         r2.idParam = QString::fromUtf8(path.mid(sizeof("/logs/") - 1));
@@ -99,13 +136,21 @@ void HttpServer::routeRequest(QTcpSocket* s, const Request& r) {
     writeNotFound(s);
 }
 
-// ---------------- Endpunkte ----------------
-
-void HttpServer::handleOptions(QTcpSocket* s, const Request&) {
+/**
+ * @brief HttpServer::handleOptions
+ * @param s
+ */
+void HttpServer::handleOptions(QTcpSocket *s, const Request &)
+{
     writeNoContentCors(s);
 }
 
-void HttpServer::handleStatus(QTcpSocket* s) {
+/**
+ * @brief HttpServer::handleStatus
+ * @param s
+ */
+void HttpServer::handleStatus(QTcpSocket *s)
+{
     QJsonObject root;
     QJsonObject nodes;
     for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
@@ -115,9 +160,19 @@ void HttpServer::handleStatus(QTcpSocket* s) {
     writeJson(s, 200, root);
 }
 
-void HttpServer::handleStart(QTcpSocket* s, const Request& r) {
-    auto* n = nodeForId(r.idParam);
-    if (!n) { writeNotFound(s, "unknown id"); return; }
+/**
+ * @brief HttpServer::handleStart
+ * @param s
+ * @param r
+ */
+void HttpServer::handleStart(QTcpSocket *s, const Request &r)
+{
+    // get correct node
+    auto *n = nodeForId(r.idParam);
+    if (!n) {
+        writeNotFound(s, "unknown id");
+        return;
+    }
 
     QStringList extra;
     bool okJson = false;
@@ -125,7 +180,9 @@ void HttpServer::handleStart(QTcpSocket* s, const Request& r) {
     if (okJson) {
         const auto a = obj.value(QStringLiteral("args"));
         if (a.isArray()) {
-            for (const auto& v : a.toArray()) extra << v.toString();
+            for (const auto &v : a.toArray()) {
+                extra << v.toString();
+            }
         } else if (a.isString()) {
             extra = a.toString().split(',', Qt::SkipEmptyParts);
         }
@@ -133,23 +190,41 @@ void HttpServer::handleStart(QTcpSocket* s, const Request& r) {
 
     const bool ok = n->start(extra);
 
-    qDebug()<<"ok: "<<ok;
-    QJsonObject out{ {"ok", ok}, {"status", n->statusJson()} };
+    qDebug() << "ok: " << ok;
+    QJsonObject out{{"ok", ok}, {"status", n->statusJson()} };
     writeJson(s, ok ? 200 : 500, out);
 }
 
-void HttpServer::handleStop(QTcpSocket* s, const Request& r) {
-    auto* n = nodeForId(r.idParam);
-    if (!n) { writeNotFound(s, "unknown id"); return; }
+/**
+ * @brief HttpServer::handleStop
+ * @param s
+ * @param r
+ */
+void HttpServer::handleStop(QTcpSocket *s, const Request &r)
+{
+    auto *n = nodeForId(r.idParam);
+    if (!n) {
+        writeNotFound(s, "unknown id");
+        return;
+    }
 
     const bool ok = n->stop();
-    QJsonObject out{ {"ok", ok}, {"status", n->statusJson()} };
+    QJsonObject out{{"ok", ok}, {"status", n->statusJson()} };
     writeJson(s, ok ? 200 : 500, out);
 }
 
-void HttpServer::handleRestart(QTcpSocket* s, const Request& r) {
-    auto* n = nodeForId(r.idParam);
-    if (!n) { writeNotFound(s, "unknown id"); return; }
+/**
+ * @brief HttpServer::handleRestart
+ * @param s
+ * @param r
+ */
+void HttpServer::handleRestart(QTcpSocket *s, const Request &r)
+{
+    auto *n = nodeForId(r.idParam);
+    if (!n) {
+        writeNotFound(s, "unknown id");
+        return;
+    }
 
     QStringList extra;
     bool okJson = false;
@@ -157,27 +232,40 @@ void HttpServer::handleRestart(QTcpSocket* s, const Request& r) {
     if (okJson) {
         const auto a = obj.value(QStringLiteral("args"));
         if (a.isArray()) {
-            for (const auto& v : a.toArray()) extra << v.toString();
+            for (const auto &v : a.toArray()) {
+                extra << v.toString();
+            }
         } else if (a.isString()) {
             extra = a.toString().split(',', Qt::SkipEmptyParts);
         }
     }
 
     const bool ok = n->restart(4000, extra);
-    QJsonObject out{ {"ok", ok}, {"status", n->statusJson()} };
+    QJsonObject out{{"ok", ok}, {"status", n->statusJson()} };
     writeJson(s, ok ? 200 : 500, out);
 }
 
-void HttpServer::handleLogs(QTcpSocket* s, const Request& r) {
-    auto* n = nodeForId(r.idParam);
-    if (!n) { writeNotFound(s, "unknown id"); return; }
+/**
+ * @brief HttpServer::handleLogs
+ * @param s
+ * @param r
+ */
+void HttpServer::handleLogs(QTcpSocket *s, const Request &r)
+{
+    auto *n = nodeForId(r.idParam);
+    if (!n) {
+        writeNotFound(s, "unknown id");
+        return;
+    }
 
     int nlines = 200;
     const auto it = r.query.constFind("n");
     if (it != r.query.cend()) {
         bool ok = false;
         int v = it.value().toInt(&ok);
-        if (ok && v > 0) nlines = v;
+        if (ok && v > 0) {
+            nlines = v;
+        }
     }
 
     const QStringList lines = n->lastLogLines(nlines);
@@ -188,82 +276,125 @@ void HttpServer::handleLogs(QTcpSocket* s, const Request& r) {
     writeJson(s, 200, out);
 }
 
-// ---------------- Hilfen ----------------
-
-INodeController* HttpServer::nodeForId(const QString& id) const {
+/**
+ * @brief HttpServer::nodeForId
+ * @param id
+ * @return
+ */
+INodeController *HttpServer::nodeForId(const QString &id) const
+{
     auto it = m_nodes.constFind(id);
-    if (it == m_nodes.cend()) return nullptr;
+    if (it == m_nodes.cend()) {
+        return nullptr;
+    }
     return it.value();
 }
 
-QJsonObject HttpServer::parseJsonObject(const QByteArray& body, bool* okOut) {
-    if (okOut) *okOut = false;
-    if (body.isEmpty()) return {};
-    const QJsonParseError err{};
+/**
+ * @brief HttpServer::parseJsonObject
+ * @param body
+ * @param okOut
+ * @return
+ */
+QJsonObject HttpServer::parseJsonObject(const QByteArray &body, bool *okOut)
+{
+    if (okOut) {
+        *okOut = false;
+    }
+    if (body.isEmpty()) {
+        return {};
+    }
     const QJsonDocument doc = QJsonDocument::fromJson(body);
     if (!doc.isNull() && doc.isObject()) {
-        if (okOut) *okOut = true;
+        if (okOut) {
+            *okOut = true;
+        }
         return doc.object();
     }
     return {};
 }
 
-QMap<QByteArray,QByteArray> HttpServer::parseQuery(const QByteArray& rawQuery) {
-    QMap<QByteArray,QByteArray> m;
+/**
+ * @brief HttpServer::parseQuery
+ * @param rawQuery
+ * @return
+ */
+QMap<QByteArray, QByteArray> HttpServer::parseQuery(const QByteArray &rawQuery)
+{
+    QMap<QByteArray, QByteArray> m;
     QUrlQuery q(QString::fromUtf8(rawQuery));
     const auto items = q.queryItems(QUrl::FullyDecoded);
-    for (const auto& it : items) {
+    for (const auto &it : items) {
         m.insert(it.first.toUtf8(), it.second.toUtf8());
     }
     return m;
 }
 
-// ---------------- HTTP Parsing/IO ----------------
+/**
+ * @brief HttpServer::readHttpRequest
+ * @param s
+ * @param outReq
+ * @return
+ */
+bool HttpServer::readHttpRequest(QTcpSocket *s, Request &outReq)
+{
+    bool log = false;
 
-bool HttpServer::readHttpRequest(QTcpSocket* s, Request& outReq) {
-    // Warten bis Header da sind
-    if (!s->waitForReadyRead(5000))
+    // Wait for header
+    if (!s->waitForReadyRead(5000)) {
         return false;
+    }
 
     QByteArray data = s->readAll();
+
     int headerEnd = data.indexOf("\r\n\r\n");
     const int headerEndAlt = data.indexOf("\n\n");
-    if (headerEnd < 0 && headerEndAlt >= 0)
-        headerEnd = headerEndAlt + 2; // toleranter Fallback
+    if (headerEnd < 0 && headerEndAlt >= 0) {
+        headerEnd = headerEndAlt + 2; // Fallback
+    }
     if (headerEnd < 0) {
-        // evtl. mehr Daten
         while (headerEnd < 0 && s->waitForReadyRead(2000)) {
             data += s->readAll();
             headerEnd = data.indexOf("\r\n\r\n");
             if (headerEnd < 0) {
                 int he2 = data.indexOf("\n\n");
-                if (he2 >= 0) headerEnd = he2 + 2;
+                if (he2 >= 0) {
+                    headerEnd = he2 + 2;
+                }
             }
         }
-        if (headerEnd < 0) return false;
+        if (headerEnd < 0) {
+            return false;
+        }
     }
 
     QByteArray head = data.left(headerEnd);
     QByteArray body = data.mid(headerEnd + 4);
-    if (data.mid(headerEnd, 4) == "\n\n")
-        body = data.mid(headerEnd); // bereits +2 gemacht oben
-
+    if (data.mid(headerEnd, 4) == "\n\n") {
+        body = data.mid(headerEnd);
+    }
     const QList<QByteArray> lines = head.split('\n');
-    if (lines.isEmpty()) return false;
+    if (lines.isEmpty()) {
+        return false;
+    }
 
     const QByteArray requestLine = lines.first().trimmed(); // "GET /status HTTP/1.1"
     const QList<QByteArray> parts = requestLine.split(' ');
-    if (parts.size() < 2) return false;
+    if (parts.size() < 2) {
+        return false;
+    }
 
     outReq.method = parts[0].trimmed();
 
-    QByteArray urlPart = parts[1].trimmed(); // kann Pfad + ?query sein
+    QByteArray urlPart = parts[1].trimmed(); // no path + ?query
     outReq.httpVersion = (parts.size() >= 3) ? parts[2].trimmed() : "HTTP/1.1";
 
     // Headers
     for (int i = 1; i < lines.size(); ++i) {
         const QByteArray line = lines[i].trimmed();
-        if (line.isEmpty()) continue;
+        if (line.isEmpty()) {
+            continue;
+        }
         int colon = line.indexOf(':');
         if (colon > 0) {
             QByteArray k = line.left(colon).trimmed().toLower();
@@ -272,7 +403,7 @@ bool HttpServer::readHttpRequest(QTcpSocket* s, Request& outReq) {
         }
     }
 
-    // Query & Path trennen
+    // Query & Path split
     int qpos = urlPart.indexOf('?');
     QByteArray rawPath = (qpos >= 0) ? urlPart.left(qpos) : urlPart;
     QByteArray rawQuery = (qpos >= 0) ? urlPart.mid(qpos + 1) : QByteArray();
@@ -280,7 +411,7 @@ bool HttpServer::readHttpRequest(QTcpSocket* s, Request& outReq) {
     outReq.path = rawPath;
     outReq.query = parseQuery(rawQuery);
 
-    // Body ggf. nachladen nach Content-Length
+    // Body with Content-Length
     int contentLen = 0;
     bool okLen = false;
     if (outReq.headers.contains("content-length")) {
@@ -297,10 +428,28 @@ bool HttpServer::readHttpRequest(QTcpSocket* s, Request& outReq) {
     }
     outReq.body = buf;
 
+    if (log) {
+        qDebug() << "Request:";
+        qDebug() << outReq.body;
+        qDebug() << outReq.headers;
+        qDebug() << outReq.httpVersion;
+        qDebug() << outReq.idParam;
+        qDebug() << outReq.method;
+        qDebug() << outReq.path;
+        qDebug() << outReq.query;
+    }
+
     return true;
 }
 
-void HttpServer::writeJson(QTcpSocket* s, int statusCode, const QJsonObject& obj) {
+/**
+ * @brief HttpServer::writeJson
+ * @param s
+ * @param statusCode
+ * @param obj
+ */
+void HttpServer::writeJson(QTcpSocket *s, int statusCode, const QJsonObject &obj)
+{
     const QByteArray payload = QJsonDocument(obj).toJson(QJsonDocument::Compact);
 
     QByteArray resp;
@@ -317,7 +466,12 @@ void HttpServer::writeJson(QTcpSocket* s, int statusCode, const QJsonObject& obj
     s->flush();
 }
 
-void HttpServer::writeNoContentCors(QTcpSocket* s) {
+/**
+ * @brief HttpServer::writeNoContentCors
+ * @param s
+ */
+void HttpServer::writeNoContentCors(QTcpSocket *s)
+{
     QByteArray resp;
     resp += httpStatusLine(204);
     resp += "Access-Control-Allow-Origin: *\r\n";
@@ -328,14 +482,32 @@ void HttpServer::writeNoContentCors(QTcpSocket* s) {
     s->flush();
 }
 
-void HttpServer::writeNotFound(QTcpSocket* s, const QString& msg) {
+/**
+ * @brief HttpServer::writeNotFound
+ * @param s
+ * @param msg
+ */
+void HttpServer::writeNotFound(QTcpSocket *s, const QString &msg)
+{
     writeJson(s, 404, QJsonObject{{"error", msg}});
 }
 
-void HttpServer::writeBadRequest(QTcpSocket* s, const QString& msg) {
+/**
+ * @brief HttpServer::writeBadRequest
+ * @param s
+ * @param msg
+ */
+void HttpServer::writeBadRequest(QTcpSocket *s, const QString &msg)
+{
     writeJson(s, 400, QJsonObject{{"error", msg}});
 }
 
-void HttpServer::writeServerError(QTcpSocket* s, const QString& msg) {
+/**
+ * @brief HttpServer::writeServerError
+ * @param s
+ * @param msg
+ */
+void HttpServer::writeServerError(QTcpSocket *s, const QString &msg)
+{
     writeJson(s, 500, QJsonObject{{"error", msg}});
 }

@@ -1,114 +1,173 @@
 #include "nodeproc.h"
-#include <QJsonArray>
 
-static QString sanitizeLine(const QByteArray& ba) {
+/**
+ * @brief sanitizeLine
+ * @param ba
+ * @return
+ */
+static QString sanitizeLine(const QByteArray &ba)
+{
     QString s = QString::fromLocal8Bit(ba);
     s.replace("\r\n", "\n");
     s.replace('\r', '\n');
     return s;
 }
 
-NodeProc::NodeProc(QString id, QString program, QStringList defaultArgs, int logCapacityLines, QObject* parent)
-    : QObject(parent), m_id(std::move(id)), m_program(std::move(program)), m_defaultArgs(std::move(defaultArgs)),
-    m_logCapacity(qMax(100, logCapacityLines)), m_logBuffer(m_logCapacity) {
-    hookProcess();
-}
-
-void NodeProc::hookProcess() {
-    QObject::connect(&m_proc, &QProcess::readyReadStandardOutput, this, [this]{ appendLog(m_proc.readAllStandardOutput()); });
-    QObject::connect(&m_proc, &QProcess::readyReadStandardError, this, [this]{ appendLog(m_proc.readAllStandardError()); });
-    QObject::connect(&m_proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this](int code, QProcess::ExitStatus es){ emit stopped(m_id, code, es); });
-    QObject::connect(&m_proc, &QProcess::started, this, [this]{
+/**
+ * @brief NodeProc::NodeProc
+ * @param id
+ * @param program
+ * @param defaultArgs
+ * @param logCapacityLines
+ * @param parent
+ */
+NodeProc::NodeProc(QString id, QString program, QStringList defaultArgs, int logCapacityLines, QObject *parent) :
+    QObject(parent),
+    m_id(std::move(id)),
+    m_program(std::move(program)),
+    m_defaultArgs(std::move(defaultArgs)),
+    m_logCapacity(qMax(100, logCapacityLines)),
+    m_logBuffer(m_logCapacity)
+{
+    QObject::connect(&m_proc, &QProcess::readyReadStandardOutput, this, [this] {
+        appendLog(m_proc.readAllStandardOutput());
+    });
+    QObject::connect(&m_proc, &QProcess::readyReadStandardError, this, [this] {
+        appendLog(m_proc.readAllStandardError());
+    });
+    QObject::connect(&m_proc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this](int code, QProcess::ExitStatus es) {
+        emit stopped(m_id, code, es);
+    });
+    QObject::connect(&m_proc, &QProcess::started, this, [this] {
         QWriteLocker g(&m_lock);
         m_startedAt = QDateTime::currentDateTime();
         emit started(m_id, m_proc.processId());
     });
 }
 
-void NodeProc::appendLog(const QByteArray& chunk) {
+/**
+ * @brief NodeProc::appendLog
+ * @param chunk
+ */
+void NodeProc::appendLog(const QByteArray &chunk)
+{
     QString s = sanitizeLine(chunk);
     const QStringList lines = s.split('\n', Qt::KeepEmptyParts);
     QWriteLocker g(&m_lock);
-    for (const QString& line : lines) {
-        if (line.isEmpty()) continue;
+    for (const QString &line : lines) {
+        if (line.isEmpty()) {
+            continue;
+        }
         m_logBuffer[(m_logStart + m_logSize) % m_logCapacity] = line;
-        if (m_logSize < m_logCapacity) ++m_logSize; else m_logStart = (m_logStart + 1) % m_logCapacity;
+        if (m_logSize < m_logCapacity) {
+            ++m_logSize;
+        } else {
+            m_logStart = (m_logStart + 1) % m_logCapacity;
+        }
     }
     emit logUpdated(m_id);
 }
 
-bool NodeProc::start(const QStringList& extraArgs)
+/**
+ * @brief NodeProc::start
+ * Starts the node process with optional extra arguments.
+ * Ensures thread-safety using read/write locks and does not block unnecessarily.
+ * @param extraArgs Additional command-line arguments to pass when starting the process.
+ * @return true if the process started successfully or is already running, false otherwise.
+ */
+bool NodeProc::start(const QStringList &extraArgs)
 {
-    // 1) Schnell prüfen, ohne lange zu halten
+    // 1) Quick pre-check without holding the lock for too long
     {
         QWriteLocker g(&m_lock);
-        if (m_proc.state() != QProcess::NotRunning) return true;
-        if (m_program.isEmpty()) return false;
+        if (m_proc.state() != QProcess::NotRunning) {
+            // Process already running
+            return true;
+        }
+        if (m_program.isEmpty()) {
+            // No executable defined
+            return false;
+        }
     }
 
-    // 2) Args außerhalb des Locks bauen + Hook aufrufen
+    // 2) Build argument list outside the write lock + call pre-start hook
     QStringList args;
     {
         QReadLocker r(&m_lock);
         args = m_defaultArgs;
     }
-    if (!extraArgs.isEmpty()) args += extraArgs;
-    beforeStart(args);
+    if (!extraArgs.isEmpty()) {
+        args += extraArgs;
+    }
+    beforeStart(args);  // Custom hook to modify args or perform setup
 
-    // 3) Start OHNE gehaltenen m_lock
+    // 3) Start process WITHOUT holding the lock
     m_proc.setProcessChannelMode(QProcess::MergedChannels);
     m_proc.start(m_program, args, QIODevice::ReadWrite);
 
-    // 4) warten ebenfalls OHNE Lock
+    // 4) Wait for the process to actually start (non-blocking fallback check)
     if (!m_proc.waitForStarted(10000)) {
-        // Fallback: trotzdem Running?
+        // In case waitForStarted() times out, check if it started anyway
         return m_proc.state() == QProcess::Running;
     }
+
     return true;
 }
 
-
-bool NodeProc::stop(int gracefulMs) {
-
-    qDebug()<<"stop start...";
+bool NodeProc::stop(int gracefulMs)
+{
+    qDebug() << "stop start...";
     QWriteLocker g(&m_lock);
-    if (m_proc.state() == QProcess::NotRunning) return true;
+    if (m_proc.state() == QProcess::NotRunning) {
+        return true;
+    }
     m_proc.terminate();
     if (!m_proc.waitForFinished(gracefulMs)) {
         m_proc.kill();
         return m_proc.waitForFinished(3000);
     }
 
-    qDebug()<<"stop end...";
+    qDebug() << "stop end...";
     return true;
 }
 
-bool NodeProc::restart(int gracefulMs, const QStringList& extraArgs) {
+bool NodeProc::restart(int gracefulMs, const QStringList &extraArgs)
+{
     stop(gracefulMs);
     return start(extraArgs);
 }
 
-QString NodeProc::program() const {
+QString NodeProc::id() const
+{
+    return m_id;
+}
+
+QString NodeProc::program() const
+{
     QReadLocker g(&m_lock);
     return m_program;
 }
 
-void NodeProc::setProgram(const QString& path) {
+void NodeProc::setProgram(const QString &path)
+{
     QWriteLocker g(&m_lock);
     m_program = path;
 }
 
-QStringList NodeProc::defaultArgs() const {
+QStringList NodeProc::defaultArgs() const
+{
     QReadLocker g(&m_lock);
     return m_defaultArgs;
 }
 
-void NodeProc::setDefaultArgs(const QStringList& args) {
+void NodeProc::setDefaultArgs(const QStringList &args)
+{
     QWriteLocker g(&m_lock);
     m_defaultArgs = args;
 }
 
-QJsonObject NodeProc::statusJson() const {
+QJsonObject NodeProc::statusJson() const
+{
     QReadLocker g(&m_lock);
     QJsonObject o;
     o["id"] = m_id;
@@ -127,18 +186,24 @@ QJsonObject NodeProc::statusJson() const {
     return o;
 }
 
-QStringList NodeProc::lastLogLines(int n) const {
+QStringList NodeProc::lastLogLines(int n) const
+{
     QReadLocker g(&m_lock);
     n = qBound(1, n, m_logSize);
-    QStringList out; out.reserve(n);
+    QStringList out;
+    out.reserve(n);
     int start = (m_logStart + (m_logSize - n + m_logCapacity)) % m_logCapacity;
-    for (int i = 0; i < n; ++i) out << m_logBuffer[(start + i) % m_logCapacity];
+    for (int i = 0; i < n; ++i) {
+        out << m_logBuffer[(start + i) % m_logCapacity];
+    }
     return out;
 }
 
-void NodeProc::setLogCapacity(int capacityLines) {
+void NodeProc::setLogCapacity(int capacityLines)
+{
     QWriteLocker g(&m_lock);
     m_logCapacity = qMax(100, capacityLines);
     m_logBuffer = QVector<QString>(m_logCapacity);
-    m_logStart = 0; m_logSize = 0;
+    m_logStart = 0;
+    m_logSize = 0;
 }
