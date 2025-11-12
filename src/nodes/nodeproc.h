@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QStringList>
 #include <QJsonArray>
+#include <QFile>
 
 #include "inodecontroller.h"
 
