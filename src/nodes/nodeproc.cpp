@@ -77,20 +77,16 @@ void NodeProc::appendLog(const QByteArray &chunk)
  */
 bool NodeProc::start(const QStringList &extraArgs)
 {
-    // 1) Quick pre-check without holding the lock for too long
     {
         QWriteLocker g(&m_lock);
         if (m_proc.state() != QProcess::NotRunning) {
-            // Process already running
             return true;
         }
         if (m_program.isEmpty()) {
-            // No executable defined
             return false;
         }
     }
 
-    // 2) Build argument list outside the write lock + call pre-start hook
     QStringList args;
     {
         QReadLocker r(&m_lock);
@@ -99,15 +95,78 @@ bool NodeProc::start(const QStringList &extraArgs)
     if (!extraArgs.isEmpty()) {
         args += extraArgs;
     }
-    beforeStart(args);  // Custom hook to modify args or perform setup
+    beforeStart(args);
 
-    // 3) Start process WITHOUT holding the lock
-    m_proc.setProcessChannelMode(QProcess::MergedChannels);
+    m_proc.setProcessChannelMode(QProcess::ForwardedChannels);
+    m_proc.setReadChannel(QProcess::StandardOutput);
+
+#ifdef Q_OS_WIN
+    // Eigene Prozessgruppe (für Ctrl+C/Ctrl+Break)
+    m_proc.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *a) {
+        // CREATE_NEW_PROCESS_GROUP
+        a->flags |= 0x00000200;
+
+        // Optional: sichtbares Fenster erzwingen, falls gewünscht
+        if (qEnvironmentVariable("GRIN_SHOW_CONSOLE") == "1") {
+            a->flags |= 0x00000010; // CREATE_NEW_CONSOLE
+        }
+    });
+
     m_proc.start(m_program, args, QIODevice::ReadWrite);
 
-    // 4) Wait for the process to actually start (non-blocking fallback check)
+#else // UNIX / LINUX / macOS
+    // Optional: sichtbares Terminal erzwingen (wenn verfügbar)
+    // GRIN_FORCE_TERMINAL=1 verwendet xterm/gnome-terminal/konsole (erste gefundene).
+    if (qEnvironmentVariable("GRIN_FORCE_TERMINAL") == "1") {
+        QString term;
+        if (QFile::exists("/usr/bin/xterm")) {
+            term = "/usr/bin/xterm";
+        } else if (QFile::exists("/usr/bin/gnome-terminal")) {
+            term = "/usr/bin/gnome-terminal";
+        } else if (QFile::exists("/usr/bin/konsole")) {
+            term = "/usr/bin/konsole";
+        }
+
+        if (!term.isEmpty()) {
+            QStringList targs;
+            if (term.endsWith("xterm")) {
+                targs << "-hold" << "-e" << m_program;
+                targs += args;
+            } else if (term.endsWith("gnome-terminal")) {
+                // gnome-terminal erwartet Befehle nach -- :
+                targs << "--" << m_program;
+                targs += args;
+            } else if (term.endsWith("konsole")) {
+                targs << "--hold" << "-e" << m_program;
+                targs += args;
+            } else {
+                // Fallback: direkt
+                targs << "-e" << m_program;
+                targs += args;
+            }
+            m_unixSetSid = false; // Terminal emu übernimmt
+            m_proc.start(term, targs, QIODevice::ReadWrite);
+        } else {
+            // Kein Terminal gefunden -> normaler Start
+            m_unixSetSid = false;
+            m_proc.start(m_program, args, QIODevice::ReadWrite);
+        }
+    } else {
+        // Headless, aber mit eigener Session/Gruppe – über /usr/bin/setsid
+        if (QFile::exists("/usr/bin/setsid")) {
+            QStringList sargs;
+            sargs << m_program;
+            sargs += args;
+            m_unixSetSid = true;
+            m_proc.start("/usr/bin/setsid", sargs, QIODevice::ReadWrite);
+        } else {
+            m_unixSetSid = false;
+            m_proc.start(m_program, args, QIODevice::ReadWrite);
+        }
+    }
+#endif
+
     if (!m_proc.waitForStarted(10000)) {
-        // In case waitForStarted() times out, check if it started anyway
         return m_proc.state() == QProcess::Running;
     }
 

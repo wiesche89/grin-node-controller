@@ -48,6 +48,21 @@ protected:
         Q_UNUSED(args);
     }
 
+    QProcess *proc()
+    {
+        return &m_proc;
+    }
+
+    const QProcess *proc() const
+    {
+        return &m_proc;
+    }
+
+    bool unixStartedWithSetSid() const
+    {
+        return m_unixSetSid;
+    }
+
 private:
     void appendLog(const QByteArray &chunk);
 
@@ -64,6 +79,8 @@ private:
     QVector<QString> m_logBuffer;
     int m_logStart = 0;
     int m_logSize = 0;
+
+    bool m_unixSetSid = false;
 };
 
 #endif // NODEPROC_H
