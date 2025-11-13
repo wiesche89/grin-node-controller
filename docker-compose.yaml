@@ -10,9 +10,6 @@ services:
 
     ports:
       - "8080:8080"      # REST API deines Controllers
-      - "3413:3413"
-      - "3414:3414"
-      - "3415:3415"
 
     environment:
       # Port, auf dem dein Controller lauscht

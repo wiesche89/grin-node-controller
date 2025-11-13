@@ -544,28 +544,23 @@ bool HttpServer::anyNodeRunning() const
 void HttpServer::handleOwnerProxy(QTcpSocket *s, const Request &r)
 {
     if (!anyNodeRunning()) {
-        writeServerError(s, "No active node to handle /owner");
+        writeServerError(s, "No active node to handle /v2/owner");
         return;
     }
 
-    // Fester Owner-API-Port (z. B. 3414)
-    const QString url = "http://127.0.0.1:3414/v2/owner";
+    // Owner-API-Port: 3413
+    const QString url = "http://127.0.0.1:3413/v2/owner";
     proxyToUrl(s, url, r);
 }
 
-/**
- * @brief HttpServer::handleForeignProxy
- * @param s
- * @param r
- */
 void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
 {
     if (!anyNodeRunning()) {
-        writeServerError(s, "No active node to handle /foreign");
+        writeServerError(s, "No active node to handle /v2/foreign");
         return;
     }
 
-    // Fester Foreign-API-Port (z. B. 3413)
+    // Foreign-API-Port: 3413
     const QString url = "http://127.0.0.1:3413/v2/foreign";
     proxyToUrl(s, url, r);
 }
@@ -573,10 +568,8 @@ void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
 void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r)
 {
     QNetworkAccessManager mgr;
+    QNetworkRequest req{ QUrl(url) };
 
-    QNetworkRequest req{ QUrl(url) };   // <--- Fix
-
-    // Content-Type durchreichen oder JSON defaulten
     auto itCt = r.headers.constFind("content-type");
     if (itCt != r.headers.cend()) {
         req.setRawHeader("Content-Type", itCt.value());
@@ -584,20 +577,20 @@ void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r)
         req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     }
 
-    // Authorization durchreichen
     auto itAuth = r.headers.constFind("authorization");
     if (itAuth != r.headers.cend()) {
         req.setRawHeader("Authorization", itAuth.value());
     }
 
     QNetworkReply *reply = mgr.post(req, r.body);
-
     QEventLoop loop;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
 
     int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (status == 0) {
+        qWarning() << "[proxy]" << url << "network error:"
+                   << reply->error() << reply->errorString();
         status = 500;
     }
 
