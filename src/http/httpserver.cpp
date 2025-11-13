@@ -145,13 +145,27 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
     writeNotFound(s);
 }
 
-/**
- * @brief HttpServer::handleOptions
- * @param s
- */
-void HttpServer::handleOptions(QTcpSocket *s, const Request &)
+void HttpServer::handleOptions(QTcpSocket *s, const Request &r)
 {
-    writeNoContentCors(s);
+    // Default, falls der Browser keine Access-Control-Request-Headers schickt
+    QByteArray allowHeaders("Content-Type, Authorization");
+
+    // Access-Control-Request-Headers vom Browser auslesen
+    auto it = r.headers.constFind("access-control-request-headers");
+    if (it != r.headers.cend() && !it.value().isEmpty()) {
+        allowHeaders = it.value();  // z.B. "content-type,user-agent"
+
+        // Case-insensitive prüfen, ob "authorization" schon drin ist
+        QByteArray lower = allowHeaders.toLower();
+        if (!lower.contains("authorization")) {
+            if (!allowHeaders.isEmpty()) {
+                allowHeaders += ", ";
+            }
+            allowHeaders += "Authorization";
+        }
+    }
+
+    writeNoContentCors(s, allowHeaders);
 }
 
 /**
@@ -486,6 +500,18 @@ void HttpServer::writeNoContentCors(QTcpSocket *s)
     resp += "Access-Control-Allow-Origin: *\r\n";
     resp += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
     resp += "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
+    resp += "Connection: close\r\n\r\n";
+    s->write(resp);
+    s->flush();
+}
+
+void HttpServer::writeNoContentCors(QTcpSocket *s, const QByteArray &allowHeaders)
+{
+    QByteArray resp;
+    resp += httpStatusLine(204);
+    resp += "Access-Control-Allow-Origin: *\r\n";
+    resp += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    resp += "Access-Control-Allow-Headers: " + allowHeaders + "\r\n";
     resp += "Connection: close\r\n\r\n";
     s->write(resp);
     s->flush();

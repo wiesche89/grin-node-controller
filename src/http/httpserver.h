@@ -52,6 +52,7 @@ private:
     static void writeNotFound(QTcpSocket *s, const QString &msg = QStringLiteral("not found"));
     static void writeBadRequest(QTcpSocket *s, const QString &msg = QStringLiteral("bad request"));
     static void writeServerError(QTcpSocket *s, const QString &msg = QStringLiteral("server error"));
+    void writeNoContentCors(QTcpSocket *s, const QByteArray &allowHeaders = QByteArray("Content-Type, Authorization"));
 
     // Routing
     void routeRequest(QTcpSocket *s, const Request &r);
