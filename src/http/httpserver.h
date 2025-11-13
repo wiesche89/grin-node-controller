@@ -15,6 +15,11 @@
 #include <QRegularExpression>
 #include <QScopedPointer>
 
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QEventLoop>
+#include <QNetworkReply>
+
 #include "inodecontroller.h"
 
 class HttpServer : public QObject
@@ -58,6 +63,13 @@ private:
     void handleStop(QTcpSocket *s, const Request &r);
     void handleRestart(QTcpSocket *s, const Request &r);
     void handleLogs(QTcpSocket *s, const Request &r);
+
+    // Handle Proxy
+    void handleOwnerProxy(QTcpSocket *s, const Request &r);
+    void handleForeignProxy(QTcpSocket *s, const Request &r);
+    bool anyNodeRunning() const;
+    void proxyToUrl(QTcpSocket *s, const QString &url, const Request &r);
+    void writeJsonRaw(QTcpSocket *s, int statusCode, const QByteArray &payload);
 
     // Helper functions
     static QJsonObject parseJsonObject(const QByteArray &body, bool *okOut = nullptr);

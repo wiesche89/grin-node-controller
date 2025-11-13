@@ -133,6 +133,15 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
         return;
     }
 
+    if (r.method == "POST" && path == "/v2/owner") {
+        handleOwnerProxy(s, r);
+        return;
+    }
+    if (r.method == "POST" && path == "/v2/foreign") {
+        handleForeignProxy(s, r);
+        return;
+    }
+
     writeNotFound(s);
 }
 
@@ -510,4 +519,106 @@ void HttpServer::writeBadRequest(QTcpSocket *s, const QString &msg)
 void HttpServer::writeServerError(QTcpSocket *s, const QString &msg)
 {
     writeJson(s, 500, QJsonObject{{"error", msg}});
+}
+
+/**
+ * @brief HttpServer::anyNodeRunning
+ * @return
+ */
+bool HttpServer::anyNodeRunning() const
+{
+    for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+        const QJsonObject st = it.value()->statusJson();
+        if (st.value("running").toBool()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief HttpServer::handleOwnerProxy
+ * @param s
+ * @param r
+ */
+void HttpServer::handleOwnerProxy(QTcpSocket *s, const Request &r)
+{
+    if (!anyNodeRunning()) {
+        writeServerError(s, "No active node to handle /owner");
+        return;
+    }
+
+    // Fester Owner-API-Port (z. B. 3414)
+    const QString url = "http://127.0.0.1:3414/v2/owner";
+    proxyToUrl(s, url, r);
+}
+
+/**
+ * @brief HttpServer::handleForeignProxy
+ * @param s
+ * @param r
+ */
+void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
+{
+    if (!anyNodeRunning()) {
+        writeServerError(s, "No active node to handle /foreign");
+        return;
+    }
+
+    // Fester Foreign-API-Port (z. B. 3413)
+    const QString url = "http://127.0.0.1:3413/v2/foreign";
+    proxyToUrl(s, url, r);
+}
+
+void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r)
+{
+    QNetworkAccessManager mgr;
+
+    QNetworkRequest req{ QUrl(url) };   // <--- Fix
+
+    // Content-Type durchreichen oder JSON defaulten
+    auto itCt = r.headers.constFind("content-type");
+    if (itCt != r.headers.cend()) {
+        req.setRawHeader("Content-Type", itCt.value());
+    } else {
+        req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    }
+
+    // Authorization durchreichen
+    auto itAuth = r.headers.constFind("authorization");
+    if (itAuth != r.headers.cend()) {
+        req.setRawHeader("Authorization", itAuth.value());
+    }
+
+    QNetworkReply *reply = mgr.post(req, r.body);
+
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (status == 0) {
+        status = 500;
+    }
+
+    const QByteArray payload = reply->readAll();
+    reply->deleteLater();
+
+    writeJsonRaw(s, status, payload);
+}
+
+void HttpServer::writeJsonRaw(QTcpSocket *s, int statusCode, const QByteArray &payload)
+{
+    QByteArray resp;
+    resp += httpStatusLine(statusCode);
+    resp += "Content-Type: application/json\r\n";
+    resp += "Content-Length: " + QByteArray::number(payload.size()) + "\r\n";
+    resp += "Access-Control-Allow-Origin: *\r\n";
+    resp += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    resp += "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
+    resp += "Connection: close\r\n\r\n";
+    resp += payload;
+
+    s->write(resp);
+    s->flush();
 }
