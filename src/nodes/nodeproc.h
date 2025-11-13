@@ -10,6 +10,8 @@
 #include <QStringList>
 #include <QJsonArray>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 
 #include "inodecontroller.h"
 
@@ -64,12 +66,25 @@ protected:
         return m_unixSetSid;
     }
 
+    void setDataDir(const QString &dir)
+    {
+        QWriteLocker g(&m_lock);
+        m_dataDir = dir;
+    }
+
+    QString dataDir() const
+    {
+        QReadLocker g(&m_lock);
+        return m_dataDir;
+    }
+
 private:
     void appendLog(const QByteArray &chunk);
 
     QString m_id;
     QString m_program;
     QStringList m_defaultArgs;
+    QString m_dataDir;
 
     mutable QReadWriteLock m_lock;
     QProcess m_proc;

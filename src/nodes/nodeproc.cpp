@@ -229,19 +229,49 @@ QJsonObject NodeProc::statusJson() const
 {
     QReadLocker g(&m_lock);
     QJsonObject o;
+
+    const bool isRunning = (m_proc.state() != QProcess::NotRunning);
+
     o["id"] = m_id;
-    o["running"] = (m_proc.state() != QProcess::NotRunning);
-    o["pid"] = static_cast<qint64>(o["running"].toBool() ? m_proc.processId() : 0);
-    o["exitCode"] = o["running"].toBool() ? 0 : m_proc.exitCode();
+    o["running"] = isRunning;
+    o["pid"] = static_cast<qint64>(isRunning ? m_proc.processId() : 0);
+    o["exitCode"] = isRunning ? 0 : m_proc.exitCode();
     o["program"] = m_program;
     o["args"] = QJsonArray::fromStringList(m_defaultArgs);
+
     if (m_startedAt.isValid()) {
         o["startedAt"] = m_startedAt.toUTC().toString(Qt::ISODate);
-        o["uptimeSec"] = o["running"].toBool() ? m_startedAt.secsTo(QDateTime::currentDateTime()) : 0;
+        o["uptimeSec"] = isRunning ? m_startedAt.secsTo(QDateTime::currentDateTime()) : 0;
     } else {
         o["startedAt"] = QJsonValue();
         o["uptimeSec"] = 0;
     }
+
+    QString ownerApiKey;
+    QString foreignApiKey;
+
+    if (!m_dataDir.isEmpty()) {
+        QDir dir(m_dataDir);
+
+        auto readSecretFile = [](const QString &filePath) -> QString {
+                                  QFile f(filePath);
+                                  if (!f.exists()) {
+                                      return QString();
+                                  }
+                                  if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                                      return QString();
+                                  }
+                                  QByteArray data = f.readAll();
+                                  return QString::fromUtf8(data).trimmed();
+                              };
+
+        ownerApiKey = readSecretFile(dir.filePath(".secret"));
+        foreignApiKey = readSecretFile(dir.filePath(".foreignsecret"));
+    }
+
+    o["ownerApiKey"] = ownerApiKey;
+    o["foreignApiKey"] = foreignApiKey;
+
     return o;
 }
 
