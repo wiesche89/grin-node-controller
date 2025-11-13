@@ -536,11 +536,6 @@ bool HttpServer::anyNodeRunning() const
     return false;
 }
 
-/**
- * @brief HttpServer::handleOwnerProxy
- * @param s
- * @param r
- */
 void HttpServer::handleOwnerProxy(QTcpSocket *s, const Request &r)
 {
     if (!anyNodeRunning()) {
@@ -548,9 +543,16 @@ void HttpServer::handleOwnerProxy(QTcpSocket *s, const Request &r)
         return;
     }
 
-    // Owner-API-Port: 3413
     const QString url = "http://127.0.0.1:3413/v2/owner";
-    proxyToUrl(s, url, r);
+
+    QString apiKey;
+
+    if (INodeController *n = firstRunningNode()) {
+        const QJsonObject st = n->statusJson();
+        apiKey = st.value(QStringLiteral("ownerApiKey")).toString();
+    }
+
+    proxyToUrl(s, url, r, apiKey);
 }
 
 void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
@@ -560,16 +562,24 @@ void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
         return;
     }
 
-    // Foreign-API-Port: 3413
     const QString url = "http://127.0.0.1:3413/v2/foreign";
-    proxyToUrl(s, url, r);
+
+    QString apiKey;
+
+    if (INodeController *n = firstRunningNode()) {
+        const QJsonObject st = n->statusJson();
+        apiKey = st.value(QStringLiteral("foreignApiKey")).toString();
+    }
+
+    proxyToUrl(s, url, r, apiKey);
 }
 
-void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r)
+void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r, const QString &apiKey)
 {
     QNetworkAccessManager mgr;
     QNetworkRequest req{ QUrl(url) };
 
+    // Content-Type übernehmen oder Default setzen
     auto itCt = r.headers.constFind("content-type");
     if (itCt != r.headers.cend()) {
         req.setRawHeader("Content-Type", itCt.value());
@@ -577,9 +587,18 @@ void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r)
         req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     }
 
-    auto itAuth = r.headers.constFind("authorization");
-    if (itAuth != r.headers.cend()) {
-        req.setRawHeader("Authorization", itAuth.value());
+    //
+    // Authorization:
+    // 1. Wenn apiKey aus NodeProc vorhanden → immer "Basic grin:<key>"
+    // 2. Sonst: evtl. Authorization vom Client durchreichen
+    //
+    if (!apiKey.isEmpty()) {
+        req.setRawHeader("Authorization", makeBasicAuthHeader(apiKey));
+    } else {
+        auto itAuth = r.headers.constFind("authorization");
+        if (itAuth != r.headers.cend()) {
+            req.setRawHeader("Authorization", itAuth.value());
+        }
     }
 
     QNetworkReply *reply = mgr.post(req, r.body);
@@ -614,4 +633,22 @@ void HttpServer::writeJsonRaw(QTcpSocket *s, int statusCode, const QByteArray &p
 
     s->write(resp);
     s->flush();
+}
+
+INodeController *HttpServer::firstRunningNode() const
+{
+    for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+        const QJsonObject st = it.value()->statusJson();
+        if (st.value("running").toBool()) {
+            return it.value();
+        }
+    }
+    return nullptr;
+}
+
+QByteArray HttpServer::makeBasicAuthHeader(const QString &password) const
+{
+    // user ist immer "grin"
+    const QByteArray raw = QByteArrayLiteral("grin:") + password.toUtf8();
+    return "Basic " + raw.toBase64();
 }

@@ -68,8 +68,10 @@ private:
     void handleOwnerProxy(QTcpSocket *s, const Request &r);
     void handleForeignProxy(QTcpSocket *s, const Request &r);
     bool anyNodeRunning() const;
-    void proxyToUrl(QTcpSocket *s, const QString &url, const Request &r);
+    void proxyToUrl(QTcpSocket *s, const QString &url, const Request &r, const QString &apiKey = QString());
     void writeJsonRaw(QTcpSocket *s, int statusCode, const QByteArray &payload);
+    INodeController *firstRunningNode() const;
+    QByteArray makeBasicAuthHeader(const QString &password) const;
 
     // Helper functions
     static QJsonObject parseJsonObject(const QByteArray &body, bool *okOut = nullptr);
