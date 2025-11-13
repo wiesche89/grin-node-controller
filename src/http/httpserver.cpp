@@ -467,7 +467,7 @@ void HttpServer::writeJson(QTcpSocket *s, int statusCode, const QJsonObject &obj
     resp += "Content-Length: " + QByteArray::number(payload.size()) + "\r\n";
     resp += "Access-Control-Allow-Origin: *\r\n";
     resp += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
-    resp += "Access-Control-Allow-Headers: Content-Type\r\n";
+    resp += "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
     resp += "Connection: close\r\n\r\n";
     resp += payload;
 
@@ -485,7 +485,7 @@ void HttpServer::writeNoContentCors(QTcpSocket *s)
     resp += httpStatusLine(204);
     resp += "Access-Control-Allow-Origin: *\r\n";
     resp += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
-    resp += "Access-Control-Allow-Headers: Content-Type\r\n";
+    resp += "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
     resp += "Connection: close\r\n\r\n";
     s->write(resp);
     s->flush();
