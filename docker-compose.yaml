@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  controller:
+    # Wenn das Image schon gebaut ist, lass "build" weg und nutze nur "image:"
+    build: .
+    image: grin-node-controller:linux
+    container_name: grin-node-controller
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"      # REST API deines Controllers
+      - "3413:3413"
+      - "3414:3414"
+      - "3415:3415"
+
+    environment:
+      # Port, auf dem dein Controller lauscht
+      CONTROLLER_PORT: "8080"
+
+      # Pfade/Args für die Node-Wrapper (im Container)
+      GRIN_RUST_BIN: "/opt/nodes/grin-rust/grin"
+      GRIN_RUST_DATADIR: "/home/appuser/.grin/main"
+      GRIN_RUST_ARGS: "--no-tui"
+
+      GRINPP_BIN: "/opt/nodes/grinpp/grin"
+      GRINPP_DATADIR: "/home/appuser/.GrinPP"
+      GRINPP_ARGS: "--public-node-api"
+
+    volumes:
+      # Rust-Node Home (~/.grin) persistent
+      - ./data/grin-rust-home:/home/appuser/.grin
+
+      # Grin++ Home (~/.GrinPP) persistent
+      - ./data/grinpp-home:/home/appuser/.GrinPP
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
