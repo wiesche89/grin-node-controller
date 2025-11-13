@@ -106,6 +106,24 @@ int main(int argc, char *argv[])
     rust.setLogCapacity(logCap);
     grinpp.setLogCapacity(logCap);
 
+    // ----------------------------
+    // DataDirs
+    // ----------------------------
+    // Grin++: Home (~/.GrinPP), persistent via Volume
+    QString grinppDataDir = qEnvironmentVariable("GRINPP_DATADIR");
+    if (grinppDataDir.isEmpty()) {
+        // fallback: Standard-Home Grin++ Container
+        grinppDataDir = QDir::homePath() + "/.GrinPP";
+    }
+    grinpp.setDataDir(grinppDataDir);
+
+    // Grin-Rust: ~/.grin/main, persistent via Volume
+    QString rustDataDir = qEnvironmentVariable("GRIN_RUST_DATADIR");
+    if (rustDataDir.isEmpty()) {
+        rustDataDir = QDir::homePath() + "/.grin/main";
+    }
+    rust.setDataDir(rustDataDir);
+
     // -------------------------------------------------------------------------------------------------------
     // HTTP Server start
     // -------------------------------------------------------------------------------------------------------

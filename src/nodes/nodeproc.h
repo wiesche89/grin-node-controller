@@ -40,6 +40,18 @@ public:
 
     void setLogCapacity(int capacityLines);
 
+    void setDataDir(const QString &dir)
+    {
+        QWriteLocker g(&m_lock);
+        m_dataDir = dir;
+    }
+
+    QString dataDir() const
+    {
+        QReadLocker g(&m_lock);
+        return m_dataDir;
+    }
+
 signals:
     void started(QString id, qint64 pid);
     void stopped(QString id, int exitCode, QProcess::ExitStatus es);
@@ -64,18 +76,6 @@ protected:
     bool unixStartedWithSetSid() const
     {
         return m_unixSetSid;
-    }
-
-    void setDataDir(const QString &dir)
-    {
-        QWriteLocker g(&m_lock);
-        m_dataDir = dir;
-    }
-
-    QString dataDir() const
-    {
-        QReadLocker g(&m_lock);
-        return m_dataDir;
     }
 
 private:

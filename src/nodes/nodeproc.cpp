@@ -247,28 +247,48 @@ QJsonObject NodeProc::statusJson() const
         o["uptimeSec"] = 0;
     }
 
+    //
+    // 🔑 API-Keys aus dem DataDir laden
+    //
     QString ownerApiKey;
     QString foreignApiKey;
 
     if (!m_dataDir.isEmpty()) {
         QDir dir(m_dataDir);
 
-        auto readSecretFile = [](const QString &filePath) -> QString {
-                                  QFile f(filePath);
-                                  if (!f.exists()) {
-                                      return QString();
-                                  }
-                                  if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                                      return QString();
-                                  }
-                                  QByteArray data = f.readAll();
-                                  return QString::fromUtf8(data).trimmed();
-                              };
+        auto readFileIfExists = [](const QString &path) -> QString {
+                                    QFile f(path);
+                                    if (!f.exists()) {
+                                        return QString();
+                                    }
+                                    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                                        return QString();
+                                    }
+                                    QByteArray data = f.readAll();
+                                    return QString::fromUtf8(data).trimmed();
+                                };
 
-        ownerApiKey = readSecretFile(dir.filePath(".secret"));
-        foreignApiKey = readSecretFile(dir.filePath(".foreignsecret"));
+        auto readFirstExisting = [&](const QStringList &candidates) -> QString {
+                                     for (const QString &name : candidates) {
+                                         const QString fullPath = dir.filePath(name);
+                                         QFileInfo fi(fullPath);
+                                         if (fi.exists() && fi.isFile()) {
+                                             QString val = readFileIfExists(fullPath);
+                                             if (!val.isEmpty()) {
+                                                 return val;
+                                             }
+                                         }
+                                     }
+                                     return QString();
+                                 };
+
+        // Rust-Grin: .api_secret / .foreign_api_secret
+        // Fallback: .secret / .foreignsecret für Custom-Setups
+        ownerApiKey = readFirstExisting({ ".api_secret"});
+        foreignApiKey = readFirstExisting({ ".foreign_api_secret"});
     }
 
+    // Grin++ hat keine entsprechenden Dateien → ownerApiKey/foreignApiKey bleiben leer
     o["ownerApiKey"] = ownerApiKey;
     o["foreignApiKey"] = foreignApiKey;
 
