@@ -28,21 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libncurses-dev libncursesw6 \
  && rm -rf /var/lib/apt/lists/*
 
-# Firmen-CA (DER -> PEM, falls nötig)
-COPY mycert.cer /usr/local/share/ca-certificates/mycert.crt
-RUN set -eux; \
-    if ! grep -q "BEGIN CERTIFICATE" /usr/local/share/ca-certificates/mycert.crt; then \
-      mv /usr/local/share/ca-certificates/mycert.crt /tmp/mycert.der; \
-      openssl x509 -inform der -in /tmp/mycert.der -out /usr/local/share/ca-certificates/mycert.crt; \
-    fi; \
-    update-ca-certificates
-
-ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
-    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
-    CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt \
-    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
-
 # Rust via rustup
 ENV RUST_VERSION=stable
 RUN set -eux; \
@@ -69,6 +54,11 @@ RUN cargo build -p grin --release \
 FROM ubuntu:24.04 AS builder-grinpp
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# buildx setzt TARGETARCH automatisch (amd64, arm64, ...)
+ARG TARGETARCH
+ENV TARGETARCH=${TARGETARCH}
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git curl ca-certificates openssl pkg-config \
     ninja-build unzip zip tar xz-utils python3 uuid-dev \
@@ -76,24 +66,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreadline-dev file \
  && rm -rf /var/lib/apt/lists/*
 
-# Firmen-CA
-COPY mycert.cer /usr/local/share/ca-certificates/mycert.crt
-RUN set -eux; \
-    if ! grep -q "BEGIN CERTIFICATE" /usr/local/share/ca-certificates/mycert.crt; then \
-      mv /usr/local/share/ca-certificates/mycert.crt /tmp/mycert.der; \
-      openssl x509 -inform der -in /tmp/mycert.der -out /usr/local/share/ca-certificates/mycert.crt; \
-    fi; \
-    update-ca-certificates
-
-ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
-    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
-
 # CMake (>= 3.21 für vcpkg)
 ENV CMAKE_VERSION=3.30.3
 ENV PATH="/usr/local/bin:${PATH}"
+
+# Architektur-spezifischer CMake-Tarball (x86_64 vs aarch64)
 RUN set -eux; \
-    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -o /tmp/cmake.tgz; \
+    if [ "$TARGETARCH" = "arm64" ]; then CMAKE_ARCH="aarch64"; else CMAKE_ARCH="x86_64"; fi; \
+    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.tar.gz" -o /tmp/cmake.tgz; \
     tar -C /opt -xzf /tmp/cmake.tgz; \
     CMAKE_DIR="$(tar tzf /tmp/cmake.tgz | head -1 | cut -d/ -f1)"; \
     ln -sf "/opt/${CMAKE_DIR}/bin/cmake" /usr/local/bin/cmake; \
@@ -103,6 +83,7 @@ RUN set -eux; \
 # vcpkg ohne Manifest, Version pinnen + Systembinaries + Binary Cache
 ENV VCPKG_ROOT=/opt/vcpkg
 ENV VCPKG_FEATURE_FLAGS=-manifests
+# Default x64, wird unten für arm64 zur Laufzeit überschrieben
 ENV VCPKG_DEFAULT_TRIPLET=x64-linux
 ENV VCPKG_FORCE_SYSTEM_BINARIES=1
 ENV VCPKG_DEFAULT_BINARY_CACHE=/opt/vcpkg_cache
@@ -114,6 +95,7 @@ RUN git clone https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}" \
  && "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
 
 # GrinPlusPlus holen (mit kleinem Cache-Buster)
+ARG CACHEBUST=1
 ARG GRINPP_REPO=https://github.com/wiesche89/GrinPlusPlus.git
 ARG GRINPP_REF=master
 ARG GRINPP_REV=force-reclone-1
@@ -128,8 +110,9 @@ RUN echo "GRINPP_REV=${GRINPP_REV}" >/dev/null \
 ENV VCPKG_OVERLAY_PORTS=/build/grinpp/vcpkg/custom_ports
 ENV VCPKG_OVERLAY_TRIPLETS=/build/grinpp/vcpkg/custom_triplets
 
-# Abhängigkeiten
+# Abhängigkeiten (Triplet abhängig von TARGETARCH: x64-linux vs arm64-linux)
 RUN set -eux; \
+  if [ "$TARGETARCH" = "arm64" ]; then export VCPKG_DEFAULT_TRIPLET=arm64-linux; else export VCPKG_DEFAULT_TRIPLET=x64-linux; fi; \
   TRIP=${VCPKG_DEFAULT_TRIPLET}; \
   env -u VCPKG_OVERLAY_PORTS -u VCPKG_OVERLAY_TRIPLETS \
     "${VCPKG_ROOT}/vcpkg" install "rocksdb:${TRIP}" --clean-after-build; \
@@ -165,9 +148,9 @@ RUN set -eux; \
     ${VCPKG_OVERLAY_TRIPLETS:+--overlay-triplets="${VCPKG_OVERLAY_TRIPLETS}"} \
     --clean-after-build
 
-
 # --- Configure & Build ---
 RUN set -eux; \
+  if [ "$TARGETARCH" = "arm64" ]; then export VCPKG_DEFAULT_TRIPLET=arm64-linux; else export VCPKG_DEFAULT_TRIPLET=x64-linux; fi; \
   cmake -S . -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
