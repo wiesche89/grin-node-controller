@@ -114,7 +114,7 @@ RUN rm -rf /work/build && mkdir -p /work/build && \
     cmake -S /work -B /work/build -G Ninja \
         -D CMAKE_BUILD_TYPE=Release \
         -D GRINPP_TESTS=OFF \
-        -D GRINPP_TOOLS=ON \
+        -D GRINPP_TOOLS=OFF \
         -D CMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake \
         -D VCPKG_TARGET_TRIPLET=${VCPKG_DEFAULT_TRIPLET} && \
     cmake --build /work/build --config Release --parallel && \
