@@ -25,6 +25,7 @@ public:
 
     virtual QJsonObject statusJson() const = 0;
     virtual QStringList lastLogLines(int n) const = 0;
+    virtual QString dataDir() const = 0;
 };
 
 #endif // INODECONTROLLER_H

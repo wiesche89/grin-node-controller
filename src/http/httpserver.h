@@ -14,6 +14,7 @@
 #include <QUrlQuery>
 #include <QRegularExpression>
 #include <QScopedPointer>
+#include <QDir>
 
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -64,6 +65,8 @@ private:
     void handleStop(QTcpSocket *s, const Request &r);
     void handleRestart(QTcpSocket *s, const Request &r);
     void handleLogs(QTcpSocket *s, const Request &r);
+    void handleDelete(QTcpSocket *s, const Request &r);
+    static bool removeDirRecursively(const QString &path);
 
     // Handle Proxy
     void handleOwnerProxy(QTcpSocket *s, const Request &r);

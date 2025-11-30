@@ -142,7 +142,80 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
         return;
     }
 
+    ///delete/{id} (POST)  -> z.B. /delete/rust oder /delete/grinpp
+    if (r.method == "POST" && path.startsWith("/delete/")) {
+        Request r2 = r;
+        r2.idParam = QString::fromUtf8(path.mid(sizeof("/delete/") - 1));
+        handleDelete(s, r2);
+        return;
+    }
+
     writeNotFound(s);
+}
+
+void HttpServer::handleDelete(QTcpSocket *s, const Request &r)
+{
+    // Node anhand von idParam finden (z.B. "rust" oder "grinpp")
+    INodeController *n = nodeForId(r.idParam);
+    if (!n) {
+        writeNotFound(s, "unknown id");
+        return;
+    }
+
+    // Node nach Möglichkeit stoppen
+    QJsonObject stBefore = n->statusJson();
+    if (stBefore.value(QStringLiteral("running")).toBool()) {
+        n->stop(); // optional: Ergebnis ignorieren, wir löschen trotzdem
+    }
+
+    const QString dir = n->dataDir();
+    if (dir.isEmpty()) {
+        writeServerError(s, "dataDir is empty");
+        return;
+    }
+
+    QDir d(dir);
+    const QString absDir = d.absolutePath();
+
+    const bool ok = removeDirRecursively(absDir);
+
+    QJsonObject out{
+        { "id", r.idParam },
+        { "dataDir", absDir },
+        { "ok", ok }
+    };
+
+    writeJson(s, ok ? 200 : 500, out);
+}
+
+bool HttpServer::removeDirRecursively(const QString &path)
+{
+    QDir dir(path);
+    if (!dir.exists()) {
+        return true; // nichts zu tun
+    }
+
+    // Sicherheit: nicht Root / oder Laufwerkswurzel entfernen
+    const QString abs = dir.absolutePath();
+    if (abs == "/" ||
+        abs == "C:/" || abs == "C:\\" ||
+        abs == "D:/" || abs == "D:\\") {
+        qWarning() << "[delete] refusing to delete dangerous path:" << abs;
+        return false;
+    }
+
+    QFileInfoList entries = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+    for (const QFileInfo &fi : entries) {
+        if (fi.isDir()) {
+            if (!removeDirRecursively(fi.absoluteFilePath()))
+                return false;
+        } else {
+            if (!QFile::remove(fi.absoluteFilePath()))
+                return false;
+        }
+    }
+
+    return dir.rmdir(dir.absolutePath());
 }
 
 void HttpServer::handleOptions(QTcpSocket *s, const Request &r)

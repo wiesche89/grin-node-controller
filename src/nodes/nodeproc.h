@@ -46,7 +46,7 @@ public:
         m_dataDir = dir;
     }
 
-    QString dataDir() const
+    QString dataDir() const override
     {
         QReadLocker g(&m_lock);
         return m_dataDir;
