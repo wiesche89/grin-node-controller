@@ -4,7 +4,7 @@ services:
   controller:
     # Wenn das Image schon gebaut ist, lass "build" weg und nutze nur "image:"
     build: .
-    image: grin-node-controller:linux
+    image: wiesche89/grin-node-controller:0.2.3
     container_name: grin-node-controller
     restart: unless-stopped
 

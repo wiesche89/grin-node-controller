@@ -155,21 +155,24 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
 
 void HttpServer::handleDelete(QTcpSocket *s, const Request &r)
 {
-    // Node anhand von idParam finden (z.B. "rust" oder "grinpp")
+    // Find the node by id, e.g. "rust" or "grinpp"
     INodeController *n = nodeForId(r.idParam);
     if (!n) {
         writeNotFound(s, "unknown id");
         return;
     }
 
-    // Node nach Möglichkeit stoppen
+    // Try to stop the node first (best effort)
     QJsonObject stBefore = n->statusJson();
     if (stBefore.value(QStringLiteral("running")).toBool()) {
-        n->stop(); // optional: Ergebnis ignorieren, wir löschen trotzdem
+        // We ignore the return value here, because we want to attempt
+        // deletion of the data directory even if stopping fails.
+        n->stop();
     }
 
     const QString dir = n->dataDir();
     if (dir.isEmpty()) {
+        // Without a dataDir, we consider this a server-side configuration error.
         writeServerError(s, "dataDir is empty");
         return;
     }
@@ -177,45 +180,93 @@ void HttpServer::handleDelete(QTcpSocket *s, const Request &r)
     QDir d(dir);
     const QString absDir = d.absolutePath();
 
-    const bool ok = removeDirRecursively(absDir);
+    // Try to remove the directory recursively.
+    // removeOk reflects whether our recursive loop had any immediate failures.
+    const bool removeOk = removeDirRecursively(absDir);
+
+    // After the attempt, check if the directory still exists on disk.
+    const bool stillExists = QDir(absDir).exists();
+    const bool finalOk = !stillExists;
+
+    if (!removeOk && finalOk) {
+        // We got a failure somewhere in the recursion, but the directory
+        // no longer exists. This usually means something like:
+        // - partial failure on a non-critical file, or
+        // - the directory was already mostly gone.
+        // We log a warning but treat it as success for the HTTP client.
+        qWarning() << "[delete]" << absDir
+                   << "reported failure from removeDirRecursively, but path no longer exists.";
+    }
 
     QJsonObject out{
         { "id", r.idParam },
         { "dataDir", absDir },
-        { "ok", ok }
+        { "ok", finalOk }
     };
 
-    writeJson(s, ok ? 200 : 500, out);
+    // If the directory is gone, respond with 200 so the client can treat it as success.
+    // Only send 500 if the directory still exists.
+    writeJson(s, finalOk ? 200 : 500, out);
 }
 
 bool HttpServer::removeDirRecursively(const QString &path)
 {
     QDir dir(path);
+
+    // If the directory does not exist, there is nothing to do.
+    // We treat this as success.
     if (!dir.exists()) {
-        return true; // nichts zu tun
+        return true;
     }
 
-    // Sicherheit: nicht Root / oder Laufwerkswurzel entfernen
     const QString abs = dir.absolutePath();
+
+    // Safety guard: refuse to delete dangerous top-level paths.
     if (abs == "/" ||
-        abs == "C:/" || abs == "C:\\" ||
-        abs == "D:/" || abs == "D:\\") {
+        abs.compare("C:/", Qt::CaseInsensitive) == 0 ||
+        abs.compare("C:\\", Qt::CaseInsensitive) == 0 ||
+        abs.compare("D:/", Qt::CaseInsensitive) == 0 ||
+        abs.compare("D:\\", Qt::CaseInsensitive) == 0)
+    {
         qWarning() << "[delete] refusing to delete dangerous path:" << abs;
         return false;
     }
 
-    QFileInfoList entries = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+    // List all entries (files + subdirectories), excluding "." and ".."
+    QFileInfoList entries = dir.entryInfoList(
+        QDir::NoDotAndDotDot | QDir::AllEntries,
+        QDir::DirsFirst | QDir::Name
+        );
+
     for (const QFileInfo &fi : entries) {
-        if (fi.isDir()) {
-            if (!removeDirRecursively(fi.absoluteFilePath()))
+        const QString entryPath = fi.absoluteFilePath();
+
+        if (fi.isSymLink() || fi.isFile()) {
+            // Remove regular files and symlinks
+            if (!QFile::remove(entryPath)) {
+                qWarning() << "[delete] failed to remove file:" << entryPath;
                 return false;
+            }
+        } else if (fi.isDir()) {
+            // Recursively remove subdirectories
+            if (!removeDirRecursively(entryPath)) {
+                // The recursive call already logged details
+                return false;
+            }
         } else {
-            if (!QFile::remove(fi.absoluteFilePath()))
-                return false;
+            // Unknown file type
+            qWarning() << "[delete] unknown file type, refusing to remove:" << entryPath;
+            return false;
         }
     }
 
-    return dir.rmdir(dir.absolutePath());
+    // Finally remove the (now empty) directory itself
+    if (!dir.rmdir(dir.absolutePath())) {
+        qWarning() << "[delete] failed to remove directory:" << dir.absolutePath();
+        return false;
+    }
+
+    return true;
 }
 
 void HttpServer::handleOptions(QTcpSocket *s, const Request &r)
