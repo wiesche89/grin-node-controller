@@ -184,9 +184,22 @@ void HttpServer::handleDelete(QTcpSocket *s, const Request &r)
     // removeOk reflects whether our recursive loop had any immediate failures.
     const bool removeOk = removeDirRecursively(absDir);
 
-    // After the attempt, check if the directory still exists on disk.
-    const bool stillExists = QDir(absDir).exists();
-    const bool finalOk = !stillExists;
+    // After the attempt, check if the directory still contains any entries.
+    // This works auch dann korrekt, wenn absDir ein Docker-Mountpoint ist:
+    // der Mountpoint bleibt als Verzeichnis bestehen, aber die Inhalte
+    // (Dateien/Unterordner) sind dann weg.
+    QDir checkDir(absDir);
+    bool hasEntries = false;
+
+    if (checkDir.exists()) {
+        QFileInfoList remaining = checkDir.entryInfoList(
+            QDir::NoDotAndDotDot | QDir::AllEntries
+            );
+        hasEntries = !remaining.isEmpty();
+    }
+
+    const bool finalOk = !hasEntries;
+
 
     if (!removeOk && finalOk) {
         // We got a failure somewhere in the recursion, but the directory
