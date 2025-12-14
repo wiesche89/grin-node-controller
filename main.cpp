@@ -60,6 +60,13 @@ int main(int argc, char *argv[])
         "n",
         "5000"
         );
+    const QString defaultNodePort = qEnvironmentVariable("GRIN_NODE_PORT", "3413");
+    QCommandLineOption optNodePort(
+        "node-port",
+        "Port for /v2/owner and /v2/foreign proxying (default 3413; testnet 13413).",
+        "port",
+        defaultNodePort
+        );
 
     p.addOption(optPort);
     p.addOption(optRustBin);
@@ -67,6 +74,7 @@ int main(int argc, char *argv[])
     p.addOption(optGppBin);
     p.addOption(optGppArg);
     p.addOption(optLogCap);
+    p.addOption(optNodePort);
     p.process(app);
 
     // -------------------------------------------------------------------------------------------------------
@@ -79,6 +87,11 @@ int main(int argc, char *argv[])
     bool okCap = false;
     const int capVal = p.value(optLogCap).toInt(&okCap);
     const int logCap = (okCap && capVal > 0) ? capVal : 5000;
+    bool okNodeProxyPort = false;
+    const int nodePortVal = p.value(optNodePort).toInt(&okNodeProxyPort);
+    const quint16 nodeProxyPort = (okNodeProxyPort && nodePortVal > 0 && nodePortVal <= 65535)
+        ? quint16(nodePortVal)
+        : quint16(3413);
 
     const QString rustBin = p.value(optRustBin);
     const QString gppBin = p.value(optGppBin);
@@ -128,6 +141,7 @@ int main(int argc, char *argv[])
     // HTTP Server start
     // -------------------------------------------------------------------------------------------------------
     HttpServer http;
+    http.setNodeRpcPort(nodeProxyPort);
     http.registerNode(&rust);
     http.registerNode(&grinpp);
 
@@ -138,6 +152,7 @@ int main(int argc, char *argv[])
 
     qInfo().noquote() << QString("[i] HTTP server listens on http://0.0.0.0:%1").arg(port);
     qInfo().noquote() << QString("[i] Log-Capacity: %1 rows").arg(logCap);
+    qInfo().noquote() << QString("[i] Proxy node port: %1").arg(nodeProxyPort);
     if (!rustBin.isEmpty()) {
         qInfo().noquote() << QString("[i] Rust Node:  %1").arg(rustBin);
     }

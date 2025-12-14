@@ -15,6 +15,7 @@
 #include <QRegularExpression>
 #include <QScopedPointer>
 #include <QDir>
+#include <QString>
 
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -31,6 +32,8 @@ public:
 
     void registerNode(INodeController *node); // id
     bool listen(quint16 port = 8080, const QHostAddress &addr = QHostAddress::Any);
+    void setNodeRpcPort(quint16 port);
+    quint16 nodeRpcPort() const;
 
 private slots:
     void onNewConnection();
@@ -76,6 +79,7 @@ private:
     void writeJsonRaw(QTcpSocket *s, int statusCode, const QByteArray &payload);
     INodeController *firstRunningNode() const;
     QByteArray makeBasicAuthHeader(const QString &password) const;
+    QString proxyEndpointUrl(const QString &endpoint) const;
 
     // Helper functions
     static QJsonObject parseJsonObject(const QByteArray &body, bool *okOut = nullptr);
@@ -85,6 +89,7 @@ private:
 private:
     QTcpServer m_server;
     QMap<QString, INodeController *> m_nodes; // id -> controller
+    quint16 m_nodeRpcPort;
 };
 
 #endif // HTTPSERVER_H

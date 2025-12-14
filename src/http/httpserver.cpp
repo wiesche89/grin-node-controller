@@ -28,7 +28,9 @@ static inline QByteArray httpStatusLine(int code)
  * @brief HttpServer::HttpServer
  * @param parent
  */
-HttpServer::HttpServer(QObject *parent) : QObject(parent)
+HttpServer::HttpServer(QObject *parent) :
+    QObject(parent),
+    m_nodeRpcPort(3413)
 {
     connect(&m_server, &QTcpServer::newConnection, this, &HttpServer::onNewConnection);
 }
@@ -706,7 +708,7 @@ void HttpServer::handleOwnerProxy(QTcpSocket *s, const Request &r)
         return;
     }
 
-    const QString url = "http://127.0.0.1:3413/v2/owner";
+    const QString url = proxyEndpointUrl(QStringLiteral("v2/owner"));
 
     QString apiKey;
 
@@ -725,7 +727,7 @@ void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
         return;
     }
 
-    const QString url = "http://127.0.0.1:3413/v2/foreign";
+    const QString url = proxyEndpointUrl(QStringLiteral("v2/foreign"));
 
     QString apiKey;
 
@@ -780,6 +782,23 @@ void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r,
     reply->deleteLater();
 
     writeJsonRaw(s, status, payload);
+}
+
+QString HttpServer::proxyEndpointUrl(const QString &endpoint) const
+{
+    return QStringLiteral("http://127.0.0.1:%1/%2")
+        .arg(m_nodeRpcPort)
+        .arg(endpoint);
+}
+
+void HttpServer::setNodeRpcPort(quint16 port)
+{
+    m_nodeRpcPort = port;
+}
+
+quint16 HttpServer::nodeRpcPort() const
+{
+    return m_nodeRpcPort;
 }
 
 void HttpServer::writeJsonRaw(QTcpSocket *s, int statusCode, const QByteArray &payload)
