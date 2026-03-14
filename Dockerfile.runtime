@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.4
+
+ARG CONTROLLER_IMAGE=wiesche89/grin-node-controller-builder:v1.0.0
+ARG GRIN_IMAGE=wiesche89/grin-builder:v1.0.0
+ARG GRINPP_IMAGE=wiesche89/grinpp-builder:v1.0.0
+
+FROM ${CONTROLLER_IMAGE} AS controller
+FROM ${GRIN_IMAGE} AS grin
+FROM ${GRINPP_IMAGE} AS grinpp
+
+FROM ubuntu:24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CONTROLLER_PORT=8080
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libqt6core6 libqt6network6 libqt6sql6 libqt6sql6-sqlite \
+    libstdc++6 libgcc-s1 zlib1g libssl3 ca-certificates \
+    libuuid1 uuid-runtime \
+    xz-utils tar unzip dpkg curl \
+    libqt6gui6 libqt6widgets6 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/nodes/grin-rust
+COPY --from=grin /out/grin /opt/nodes/grin-rust/grin
+RUN chmod 0755 /opt/nodes/grin-rust/grin
+
+WORKDIR /opt/nodes/grinpp
+COPY --from=grinpp /out/grinpp /opt/nodes/grinpp/grin
+RUN chmod 0755 /opt/nodes/grinpp/grin
+
+WORKDIR /opt/app
+COPY --from=controller /out/grin-node-controller /opt/app/grin-node-controller
+RUN chmod +x /opt/app/grin-node-controller
+
+ENV GRIN_RUST_BIN="/opt/nodes/grin-rust/grin" \
+    GRIN_RUST_DATADIR="/data/grin-rust" \
+    GRINPP_BIN="/opt/nodes/grinpp/grin" \
+    GRINPP_DATADIR="/data/grinpp"
+
+RUN if ! getent group appuser >/dev/null; then groupadd appuser; fi && \
+    if ! id -u appuser >/dev/null 2>&1; then useradd -m -g appuser -s /bin/bash appuser; fi && \
+    mkdir -p /data/grin-rust /data/grinpp && \
+    chown -R appuser:appuser /opt/app /opt/nodes /data
+
+USER appuser
+WORKDIR /home/appuser
+
+EXPOSE 8080 3413 3414 3415
+
+ENTRYPOINT ["/opt/app/grin-node-controller"]

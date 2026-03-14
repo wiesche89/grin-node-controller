@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.4
+
+FROM ubuntu:24.04 AS builder-controller
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools qt6-websockets-dev \
+    libqt6sql6 libqt6sql6-sqlite \
+    build-essential git ca-certificates \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+RUN qmake6 grin-node-controller.pro && \
+    make -j"$(nproc)" && \
+    install -D -m 0755 /src/grin-node-controller /out/grin-node-controller
+
+FROM scratch
+COPY --from=builder-controller /out/grin-node-controller /out/grin-node-controller

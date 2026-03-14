@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.4
+
+ARG GRIN_REPO=https://github.com/mimblewimble/grin.git
+ARG GRIN_REF=v5.4.0
+
+FROM ubuntu:24.04 AS builder-grin
+
+ARG GRIN_REPO
+ARG GRIN_REF
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config cmake clang git curl ca-certificates openssl \
+    libssl-dev libcurl4-openssl-dev \
+    libncurses-dev libncursesw6 \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV RUST_VERSION=stable
+RUN set -eux; \
+    curl -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
+    sh /tmp/rustup.sh -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}"; \
+    echo 'export PATH=/root/.cargo/bin:$PATH' >/etc/profile.d/cargo.sh
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /build/grin
+RUN git clone --single-branch "${GRIN_REPO}" . && \
+    git checkout "${GRIN_REF}"
+
+RUN cargo build -p grin --release && \
+    strip target/release/grin && \
+    install -D -m 0755 target/release/grin /out/grin
+
+FROM scratch
+COPY --from=builder-grin /out/grin /out/grin

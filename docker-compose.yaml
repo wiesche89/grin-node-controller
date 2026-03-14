@@ -1,15 +1,20 @@
-version: "3.9"
-
 services:
   controller:
-    # Wenn das Image schon gebaut ist, lass "build" weg und nutze nur "image:"
-    build: .
-    image: wiesche89/grin-node-controller:0.2.3
+    image: wiesche89/grin-node-runtime:v1.0.0
     container_name: grin-node-controller
     restart: unless-stopped
 
+    # Optional fuer lokale Runtime-Builds mit festen Builder-Tags:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile.runtime
+    #   args:
+    #     CONTROLLER_IMAGE: wiesche89/grin-node-controller-builder:v1.0.0
+    #     GRIN_IMAGE: wiesche89/grin-builder:v1.0.0
+    #     GRINPP_IMAGE: wiesche89/grinpp-builder:v1.0.0
+
     ports:
-      - "8080:8080"      # REST API deines Controllers
+      - "13416:8080"      # REST API deines Controllers
       - "3413:3413"
       - "3414:3414"
       - "3415:3415"

@@ -1,64 +1,15 @@
-# =========================
 # syntax=docker/dockerfile:1.4
-ARG TARGETARCH
+
 ARG DOCKCROSS_PLATFORM=linux/amd64
 ARG GRINPP_REPO=https://github.com/wiesche89/GrinPlusPlus.git
 ARG GRINPP_REF=master
+ARG VCPKG_REF=2024.09.30
 
-# =========================
-# Stage 1: Controller-Builder (Qt)
-# =========================
-FROM ubuntu:24.04 AS builder-controller
-
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y \
-    qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools qt6-websockets-dev \
-    libqt6sql6 libqt6sql6-sqlite \
-    build-essential git ca-certificates \
- && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /src
-RUN git clone --branch main --single-branch https://github.com/wiesche89/grin-node-controller.git .
-RUN qmake6 grin-node-controller.pro && make -j"$(nproc)"
-
-# =========================
-# Stage 2: Grin-Builder (Rust via rustup)
-# =========================
-FROM ubuntu:24.04 AS builder-grin
-
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential pkg-config cmake clang git curl ca-certificates openssl \
-    libssl-dev libcurl4-openssl-dev \
-    libncurses-dev libncursesw6 \
- && rm -rf /var/lib/apt/lists/*
-
-# Rust via rustup
-ENV RUST_VERSION=stable
-RUN set -eux; \
-    curl -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
-    sh /tmp/rustup.sh -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}"; \
-    echo 'export PATH=/root/.cargo/bin:$PATH' >/etc/profile.d/cargo.sh
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-RUN rustc -V && cargo -V && curl -I https://index.crates.io/config.json
-
-ARG GRIN_REPO=https://github.com/mimblewimble/grin.git
-ARG GRIN_REF=v5.4.0
-WORKDIR /build/grin
-RUN git clone --single-branch "${GRIN_REPO}" . && git checkout "${GRIN_REF}"
-
-RUN cargo build -p grin --release \
- && strip target/release/grin \
- && install -D -m 0755 target/release/grin /out/grin
-
-# =========================
-# Stage 3a: Grin++-Builder ARM64 (dockcross)
-# =========================
 FROM --platform=${DOCKCROSS_PLATFORM} dockcross/linux-arm64 AS builder-grinpp-arm64
 
 ARG GRINPP_REPO
 ARG GRINPP_REF
+ARG VCPKG_REF
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV VCPKG_FORCE_SYSTEM_BINARIES=1 \
@@ -78,6 +29,8 @@ RUN rm -rf /work && \
     git -C /work submodule update --init --recursive
 WORKDIR /work
 
+RUN sed -i 's/727fe50a5fb1df86ec5d807770f408a52609cbeb8510b4f4183b2a35a537905719bdb6348afcb103ff00ce946a8094ac9559b6e3e5b2ccc2a2d0c08f75577eeb/269bda48307db8b7b4bd734704bc49add71f947704109416f9e9d2304bc60a39fa33ae201ccac54721bdce7d521067fc3d75022044557ab6cb37890b03505411/' /work/vcpkg/custom_ports/libsodium/portfile.cmake
+
 RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
         git curl unzip tar \
@@ -90,7 +43,6 @@ RUN apt-get update && apt-get upgrade -y && \
     && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
-ARG VCPKG_REF=2024.09.30
 RUN git clone https://github.com/microsoft/vcpkg /vcpkg && \
     cd /vcpkg && git checkout ${VCPKG_REF} && \
     ./bootstrap-vcpkg.sh -disableMetrics
@@ -119,15 +71,16 @@ RUN rm -rf /work/build && mkdir -p /work/build && \
         -D VCPKG_TARGET_TRIPLET=${VCPKG_DEFAULT_TRIPLET} && \
     cmake --build /work/build --config Release --parallel && \
     cmake --build /work/build --config Release --target GrinNode && \
-    install -Dm755 /work/bin/Release/GrinNode /out/grinpp && \
-    ls -lh /out/grinpp
+    install -Dm755 /work/bin/Release/GrinNode /out/grinpp
 
-# =========================
-# Stage 3b: Grin++-Builder AMD64 (Ubuntu + vcpkg)
-# =========================
-FROM ubuntu:24.04 AS builder-grinpp-amd64
+FROM --platform=linux/amd64 ubuntu:24.04 AS builder-grinpp-amd64
+
+ARG GRINPP_REPO
+ARG GRINPP_REF
+ARG VCPKG_REF
 
 ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git curl ca-certificates openssl pkg-config \
     ninja-build unzip zip tar xz-utils python3 \
@@ -155,18 +108,18 @@ ENV VCPKG_BUILD_TYPE=release
 
 RUN mkdir -p /opt/vcpkg_cache && chmod 777 /opt/vcpkg_cache
 
-RUN git clone https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}" \
- && git -C "${VCPKG_ROOT}" checkout 2024.09.30 \
- && "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+RUN git clone https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}" && \
+    git -C "${VCPKG_ROOT}" checkout ${VCPKG_REF} && \
+    "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
 
-ARG GRINPP_REPO
-ARG GRINPP_REF
 WORKDIR /build
 RUN git clone "${GRINPP_REPO}" grinpp && \
     git -C grinpp checkout "${GRINPP_REF}" && \
     git config --global --add safe.directory /build/grinpp && \
     git -C grinpp submodule update --init --recursive
 WORKDIR /build/grinpp
+
+RUN sed -i 's/727fe50a5fb1df86ec5d807770f408a52609cbeb8510b4f4183b2a35a537905719bdb6348afcb103ff00ce946a8094ac9559b6e3e5b2ccc2a2d0c08f75577eeb/269bda48307db8b7b4bd734704bc49add71f947704109416f9e9d2304bc60a39fa33ae201ccac54721bdce7d521067fc3d75022044557ab6cb37890b03505411/' /build/grinpp/vcpkg/custom_ports/libsodium/portfile.cmake
 
 ENV VCPKG_OVERLAY_PORTS=/build/grinpp/vcpkg/custom_ports
 ENV VCPKG_OVERLAY_TRIPLETS=/build/grinpp/vcpkg/custom_triplets
@@ -212,57 +165,22 @@ RUN cmake -S /build/grinpp -B /build/grinpp/build -G Ninja \
       -DGRINPP_TESTS=OFF \
       -DGRINPP_TOOLS=OFF && \
     cmake --build /build/grinpp/build --parallel && \
-    install -Dm755 /build/grinpp/bin/Release/GrinNode /out/grinpp && \
-    ls -lh /out/grinpp
+    install -Dm755 /build/grinpp/bin/Release/GrinNode /out/grinpp
 
-# =========================
-# Stage 4a: Select Grin++ builder per Architektur
-# =========================
-FROM builder-grinpp-${TARGETARCH} AS builder-grinpp-selected
+FROM alpine:3.20 AS builder-grinpp-export
 
-# =========================
-# Stage 4b: Runtime
-# =========================
-FROM ubuntu:24.04 AS runtime
+ARG TARGETARCH
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV CONTROLLER_PORT=8080
+COPY --from=builder-grinpp-amd64 /out/grinpp /tmp/grinpp-amd64
+COPY --from=builder-grinpp-arm64 /out/grinpp /tmp/grinpp-arm64
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libqt6core6 libqt6network6 libqt6sql6 libqt6sql6-sqlite \
-    libstdc++6 libgcc-s1 zlib1g libssl3 ca-certificates \
-    libuuid1 uuid-runtime \
-    xz-utils tar unzip dpkg curl \
-    libqt6gui6 libqt6widgets6 \
- && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /out && \
+    case "${TARGETARCH}" in \
+      amd64) cp /tmp/grinpp-amd64 /out/grinpp ;; \
+      arm64) cp /tmp/grinpp-arm64 /out/grinpp ;; \
+      *) echo "Unsupported TARGETARCH=${TARGETARCH}" && exit 1 ;; \
+    esac && \
+    chmod 0755 /out/grinpp
 
-# Grin (Rust)
-WORKDIR /opt/nodes/grin-rust
-COPY --from=builder-grin /out/grin /opt/nodes/grin-rust/grin
-RUN chmod 0755 /opt/nodes/grin-rust/grin
-
-# Grin++ (aus Builder-Stage)
-WORKDIR /opt/nodes/grinpp
-COPY --from=builder-grinpp-selected /out/grinpp /opt/nodes/grinpp/grin
-RUN chmod 0755 /opt/nodes/grinpp/grin
-
-# Pfade fuer Controller
-ENV GRIN_RUST_BIN="/opt/nodes/grin-rust/grin" \
-    GRIN_RUST_DATADIR="/data/grin-rust" \
-    GRINPP_BIN="/opt/nodes/grinpp/grin" \
-    GRINPP_DATADIR="/data/grinpp"
-
-# Controller
-WORKDIR /opt/app
-COPY --from=builder-controller /src/grin-node-controller /opt/app/grin-node-controller
-RUN chmod +x /opt/app/grin-node-controller
-
-# User + Datenverzeichnisse
-RUN useradd -m appuser && mkdir -p /data/grin-rust /data/grinpp && chown -R appuser:appuser /opt /data
-USER appuser
-
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD curl -fsS "http://127.0.0.1:${CONTROLLER_PORT}/health" || exit 1
-
-CMD ["/opt/app/grin-node-controller"]
+FROM scratch
+COPY --from=builder-grinpp-export /out/grinpp /out/grinpp
