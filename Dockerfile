@@ -43,8 +43,8 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN rustc -V && cargo -V && curl -I https://index.crates.io/config.json
 
-ARG GRIN_REPO=https://github.com/wiesche89/grin.git
-ARG GRIN_REF=master
+ARG GRIN_REPO=https://github.com/mimblewimble/grin.git
+ARG GRIN_REF=v5.4.0
 WORKDIR /build/grin
 RUN git clone --single-branch "${GRIN_REPO}" . && git checkout "${GRIN_REF}"
 
