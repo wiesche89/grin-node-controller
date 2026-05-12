@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
-ARG GRIN_REPO=https://github.com/mimblewimble/grin.git
-ARG GRIN_REF=v5.4.0
+ARG GRIN_REPO=https://github.com/wiesche89/grin.git
+ARG GRIN_REF=master
 
 FROM ubuntu:24.04 AS builder-grin
 
