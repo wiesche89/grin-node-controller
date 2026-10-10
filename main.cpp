@@ -23,6 +23,8 @@ int main(int argc, char *argv[])
     p.setApplicationDescription("Grin Node Controller for Grin Rust Node and Grin++");
     p.addHelpOption();
     p.addVersionOption();
+    QCommandLineOption requireAuth("require-auth", "Require CONTROLLER_PASSWORD for API access.");
+    p.addOption(requireAuth);
 
     QCommandLineOption optPort(
         QStringList() << "p" << "port",
@@ -76,6 +78,11 @@ int main(int argc, char *argv[])
     p.addOption(optLogCap);
     p.addOption(optNodePort);
     p.process(app);
+
+    if (p.isSet(requireAuth) && qgetenv("CONTROLLER_PASSWORD").isEmpty()) {
+        qCritical("CONTROLLER_PASSWORD must be set when --require-auth is used.");
+        return 1;
+    }
 
     // -------------------------------------------------------------------------------------------------------
     // Option validation

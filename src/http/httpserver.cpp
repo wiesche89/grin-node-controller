@@ -15,6 +15,8 @@ static inline QByteArray httpStatusLine(int code)
         return "HTTP/1.1 204 No Content\r\n";
     case 400:
         return "HTTP/1.1 400 Bad Request\r\n";
+    case 401:
+        return "HTTP/1.1 401 Unauthorized\r\n";
     case 404:
         return "HTTP/1.1 404 Not Found\r\n";
     case 500:
@@ -90,6 +92,15 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
     if (r.method == "OPTIONS") {
         handleOptions(s, r);
         return;
+    }
+
+    const QByteArray password = qgetenv("CONTROLLER_PASSWORD");
+    if (qEnvironmentVariableIsSet("CONTROLLER_PASSWORD")) {
+        const QByteArray expected = "Basic " + (QByteArray("grin:") + password).toBase64();
+        if (password.isEmpty() || r.headers.value("authorization") != expected) {
+            writeJson(s, 401, QJsonObject{{"error", "Authentication required"}});
+            return;
+        }
     }
 
     // normalize path (without trailing slash, root)
