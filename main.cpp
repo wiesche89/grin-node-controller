@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
     // -------------------------------------------------------------------------------------------------------
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName("grin-node-controller");
-    QCoreApplication::setApplicationVersion("0.0.1");
+    QCoreApplication::setApplicationVersion("0.0.2");
 
     // -------------------------------------------------------------------------------------------------------
     // CLI Parser

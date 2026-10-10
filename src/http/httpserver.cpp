@@ -155,6 +155,11 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
         return;
     }
 
+    if (r.method == "POST" && path == "/wallet/v2/foreign") {
+        handleForeignProxy(s, r, false);
+        return;
+    }
+
     ///delete/{id} (POST)  -> z.B. /delete/rust oder /delete/grinpp
     if (r.method == "POST" && path.startsWith("/delete/")) {
         Request r2 = r;
@@ -731,7 +736,7 @@ void HttpServer::handleOwnerProxy(QTcpSocket *s, const Request &r)
     proxyToUrl(s, url, r, apiKey);
 }
 
-void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
+void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r, bool useNodeKey)
 {
     if (!anyNodeRunning()) {
         writeServerError(s, "No active node to handle /v2/foreign");
@@ -742,7 +747,7 @@ void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r)
 
     QString apiKey;
 
-    if (INodeController *n = firstRunningNode()) {
+    if (INodeController *n = useNodeKey ? firstRunningNode() : nullptr) {
         const QJsonObject st = n->statusJson();
         apiKey = st.value(QStringLiteral("foreignApiKey")).toString();
     }

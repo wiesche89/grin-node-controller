@@ -73,7 +73,7 @@ private:
 
     // Handle Proxy
     void handleOwnerProxy(QTcpSocket *s, const Request &r);
-    void handleForeignProxy(QTcpSocket *s, const Request &r);
+    void handleForeignProxy(QTcpSocket *s, const Request &r, bool useNodeKey = true);
     bool anyNodeRunning() const;
     void proxyToUrl(QTcpSocket *s, const QString &url, const Request &r, const QString &apiKey = QString());
     void writeJsonRaw(QTcpSocket *s, int statusCode, const QByteArray &payload);
