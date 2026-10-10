@@ -15,7 +15,9 @@ COPY . .
 
 RUN qmake6 grin-node-controller.pro && \
     make -j"$(nproc)" && \
-    install -D -m 0755 /src/grin-node-controller /out/grin-node-controller
+    install -D -m 0755 /src/grin-node-controller /out/grin-node-controller && \
+    install -D -m 0644 /src/LICENSE /out/LICENSE
 
 FROM scratch
 COPY --from=builder-controller /out/grin-node-controller /out/grin-node-controller
+COPY --from=builder-controller /out/LICENSE /out/LICENSE

@@ -58,7 +58,8 @@ docker buildx inspect --bootstrap
 
 ## Build builder images
 
-Start with version `v1.0.0`.
+The tags below are examples. Use the source URLs, commits and versions from
+`releases.json`. Build the controller from its listed commit.
 
 ### 1. Controller builder
 
@@ -76,6 +77,8 @@ docker buildx build --platform linux/amd64,linux/arm64 ^
 docker buildx build --platform linux/amd64,linux/arm64 ^
   -t wiesche89/grin-builder:v1.0.0 ^
   -f Dockerfile.grin ^
+  --build-arg GRIN_REPO=%GRIN_REPO% ^
+  --build-arg GRIN_REF=%GRIN_REF% ^
   . ^
   --push
 ```
@@ -86,6 +89,9 @@ docker buildx build --platform linux/amd64,linux/arm64 ^
 docker buildx build --platform linux/amd64,linux/arm64 ^
   -t wiesche89/grinpp-builder:v1.0.0 ^
   -f Dockerfile.grinpp ^
+  --build-arg GRINPP_REPO=%GRINPP_REPO% ^
+  --build-arg GRINPP_REF=%GRINPP_REF% ^
+  --build-arg GRINPP_VERSION=%GRINPP_VERSION% ^
   . ^
   --push
 ```
@@ -148,19 +154,26 @@ That means:
 - separate runtime versions for release and staging
 - network settings in the Umbrel app configurations
 
-## Rust updates
+## Releases
 
-| Network | Umbrel app | Runtime | Grin |
-| --- | --- | --- | --- |
-| Mainnet | 0.2.7 | v1.0.1 | v5.5.2 (`dbaff34f`) |
-| Testnet | 0.2.26 | v1.2.6 | staging (`4182d342`) |
+`releases.json` sets the runtime version and the repository, version and commit
+for the controller, Rust Grin and Grin++. Commit controller changes first.
 
-The workflow pins these commits and builds amd64 and arm64 images when started
-manually. The `rust-update` target in `Dockerfile.runtime` replaces only Rust
-Grin; controller and Grin++ stay unchanged. Publish the Umbrel app updates after
-the images have been built and tested.
+Push a matching `mainnet-<version>` or `testnet-<version>` tag to release.
+Manual CI runs use the same tags. All source commits must be pushed first.
+CI builds and checks amd64 and arm64 before publishing the runtime.
 
 ## Notes
 
 - The legacy monolithic `Dockerfile` is no longer the preferred build path.
 - `Dockerfile.grinpp` includes the current `libsodium` hash workaround required by the upstream Grin++ vcpkg overlay port.
+
+## Umbrel access
+
+Set `CONTROLLER_PASSWORD` and start with `--require-auth`.
+API requests use Basic auth with username `grin`.
+
+Test a binary: `python3 tests/auth.py /path/to/grin-node-controller`.
+Test an image: `python3 tests/auth.py --image <image>`.
+
+Source: Apache-2.0. Dependencies retain their own licenses.

@@ -1,83 +1,13 @@
 # syntax=docker/dockerfile:1.4
 
-ARG DOCKCROSS_PLATFORM=linux/amd64
-ARG GRINPP_REPO=https://github.com/wiesche89/GrinPlusPlus.git
-ARG GRINPP_REF=master
+FROM ubuntu:24.04 AS builder-grinpp
+
+ARG TARGETARCH
+
+ARG GRINPP_REPO
+ARG GRINPP_REF
+ARG GRINPP_VERSION
 ARG VCPKG_REF=2024.09.30
-
-FROM --platform=${DOCKCROSS_PLATFORM} dockcross/linux-arm64 AS builder-grinpp-arm64
-
-ARG GRINPP_REPO
-ARG GRINPP_REF
-ARG VCPKG_REF
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV VCPKG_FORCE_SYSTEM_BINARIES=1 \
-    VCPKG_OVERLAY_PORTS=/work/vcpkg/custom_ports \
-    VCPKG_OVERLAY_TRIPLETS=/work/vcpkg/custom_triplets \
-    VCPKG_DEFAULT_TRIPLET=arm64-unknown-linux-static \
-    VCPKG_FEATURE_FLAGS=-compilertracking \
-    VCPKG_BUILD_TYPE=release \
-    VCPKG_MAX_CONCURRENCY=8 \
-    GRINPP_CHAINLOAD_TOOLCHAIN=/usr/xcc/aarch64-unknown-linux-gnu/Toolchain.cmake
-
-WORKDIR /
-RUN rm -rf /work && \
-    git clone "${GRINPP_REPO}" /work && \
-    git -C /work checkout "${GRINPP_REF}" && \
-    git config --global --add safe.directory /work && \
-    git -C /work submodule update --init --recursive
-WORKDIR /work
-
-RUN sed -i 's/727fe50a5fb1df86ec5d807770f408a52609cbeb8510b4f4183b2a35a537905719bdb6348afcb103ff00ce946a8094ac9559b6e3e5b2ccc2a2d0c08f75577eeb/269bda48307db8b7b4bd734704bc49add71f947704109416f9e9d2304bc60a39fa33ae201ccac54721bdce7d521067fc3d75022044557ab6cb37890b03505411/' /work/vcpkg/custom_ports/libsodium/portfile.cmake
-
-RUN apt-get update && apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends \
-        git curl unzip tar \
-        build-essential pkg-config \
-        cmake ninja-build \
-        autoconf automake libtool m4 \
-        libpthread-stubs0-dev \
-        autopoint po4a \
-        ca-certificates \
-    && apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN git clone https://github.com/microsoft/vcpkg /vcpkg && \
-    cd /vcpkg && git checkout ${VCPKG_REF} && \
-    ./bootstrap-vcpkg.sh -disableMetrics
-
-RUN git config --global --add safe.directory /work && \
-    git -C /work submodule update --init --recursive
-
-RUN env -u VCPKG_OVERLAY_PORTS \
-    /vcpkg/vcpkg install --debug \
-      --overlay-triplets=${VCPKG_OVERLAY_TRIPLETS} \
-      --triplet ${VCPKG_DEFAULT_TRIPLET} \
-      rocksdb
-
-RUN /vcpkg/vcpkg install --debug \
-      --overlay-ports=${VCPKG_OVERLAY_PORTS} \
-      --overlay-triplets=${VCPKG_OVERLAY_TRIPLETS} \
-      --triplet ${VCPKG_DEFAULT_TRIPLET} \
-      @/work/vcpkg/packages.txt
-
-RUN rm -rf /work/build && mkdir -p /work/build && \
-    cmake -S /work -B /work/build -G Ninja \
-        -D CMAKE_BUILD_TYPE=Release \
-        -D GRINPP_TESTS=OFF \
-        -D GRINPP_TOOLS=OFF \
-        -D CMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake \
-        -D VCPKG_TARGET_TRIPLET=${VCPKG_DEFAULT_TRIPLET} && \
-    cmake --build /work/build --config Release --parallel && \
-    cmake --build /work/build --config Release --target GrinNode && \
-    install -Dm755 /work/bin/Release/GrinNode /out/grinpp
-
-FROM --platform=linux/amd64 ubuntu:24.04 AS builder-grinpp-amd64
-
-ARG GRINPP_REPO
-ARG GRINPP_REF
-ARG VCPKG_REF
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -91,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CMAKE_VERSION=3.30.3
 ENV PATH="/usr/local/bin:${PATH}"
 RUN set -eux; \
-    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -o /tmp/cmake.tgz; \
+    case "$TARGETARCH" in amd64) cmake_arch=x86_64 ;; arm64) cmake_arch=aarch64 ;; *) exit 1 ;; esac; \
+    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${cmake_arch}.tar.gz" -o /tmp/cmake.tgz; \
     tar -C /opt -xzf /tmp/cmake.tgz; \
     CMAKE_DIR="$(tar tzf /tmp/cmake.tgz | head -1 | cut -d/ -f1)"; \
     ln -sf "/opt/${CMAKE_DIR}/bin/cmake" /usr/local/bin/cmake; \
@@ -118,17 +49,25 @@ RUN git clone "${GRINPP_REPO}" grinpp && \
     git config --global --add safe.directory /build/grinpp && \
     git -C grinpp submodule update --init --recursive
 WORKDIR /build/grinpp
+RUN test "$(git rev-parse HEAD)" = "$GRINPP_REF" && \
+    grep -F "GRINPP_VERSION = \"${GRINPP_VERSION}\";" include/GrinVersion.h
 
 RUN sed -i 's/727fe50a5fb1df86ec5d807770f408a52609cbeb8510b4f4183b2a35a537905719bdb6348afcb103ff00ce946a8094ac9559b6e3e5b2ccc2a2d0c08f75577eeb/269bda48307db8b7b4bd734704bc49add71f947704109416f9e9d2304bc60a39fa33ae201ccac54721bdce7d521067fc3d75022044557ab6cb37890b03505411/' /build/grinpp/vcpkg/custom_ports/libsodium/portfile.cmake
 
 ENV VCPKG_OVERLAY_PORTS=/build/grinpp/vcpkg/custom_ports
 ENV VCPKG_OVERLAY_TRIPLETS=/build/grinpp/vcpkg/custom_triplets
-ENV VCPKG_DEFAULT_TRIPLET=x64-linux
+RUN case "$TARGETARCH" in \
+      amd64) echo x64-linux > /tmp/vcpkg-triplet ;; \
+      arm64) echo arm64-unknown-linux-static > /tmp/vcpkg-triplet ;; \
+      *) exit 1 ;; \
+    esac
 
-RUN env -u VCPKG_OVERLAY_PORTS -u VCPKG_OVERLAY_TRIPLETS \
+RUN VCPKG_DEFAULT_TRIPLET=$(cat /tmp/vcpkg-triplet) && \
+    env -u VCPKG_OVERLAY_PORTS \
       "${VCPKG_ROOT}/vcpkg" install "rocksdb:${VCPKG_DEFAULT_TRIPLET}" --clean-after-build
 
-RUN BASE_INSTALLS=" \
+RUN VCPKG_DEFAULT_TRIPLET=$(cat /tmp/vcpkg-triplet) && \
+    BASE_INSTALLS=" \
       libsodium:${VCPKG_DEFAULT_TRIPLET} \
       zlib:${VCPKG_DEFAULT_TRIPLET} \
       civetweb:${VCPKG_DEFAULT_TRIPLET} \
@@ -156,7 +95,8 @@ RUN BASE_INSTALLS=" \
       --overlay-ports="${VCPKG_OVERLAY_PORTS}" \
       --clean-after-build
 
-RUN cmake -S /build/grinpp -B /build/grinpp/build -G Ninja \
+RUN VCPKG_DEFAULT_TRIPLET=$(cat /tmp/vcpkg-triplet) && \
+    cmake -S /build/grinpp -B /build/grinpp/build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
       -DVCPKG_TARGET_TRIPLET=${VCPKG_DEFAULT_TRIPLET} \
@@ -167,20 +107,5 @@ RUN cmake -S /build/grinpp -B /build/grinpp/build -G Ninja \
     cmake --build /build/grinpp/build --parallel && \
     install -Dm755 /build/grinpp/bin/Release/GrinNode /out/grinpp
 
-FROM alpine:3.20 AS builder-grinpp-export
-
-ARG TARGETARCH
-
-COPY --from=builder-grinpp-amd64 /out/grinpp /tmp/grinpp-amd64
-COPY --from=builder-grinpp-arm64 /out/grinpp /tmp/grinpp-arm64
-
-RUN mkdir -p /out && \
-    case "${TARGETARCH}" in \
-      amd64) cp /tmp/grinpp-amd64 /out/grinpp ;; \
-      arm64) cp /tmp/grinpp-arm64 /out/grinpp ;; \
-      *) echo "Unsupported TARGETARCH=${TARGETARCH}" && exit 1 ;; \
-    esac && \
-    chmod 0755 /out/grinpp
-
 FROM scratch
-COPY --from=builder-grinpp-export /out/grinpp /out/grinpp
+COPY --from=builder-grinpp /out/grinpp /out/grinpp

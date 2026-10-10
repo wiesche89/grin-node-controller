@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
-ARG GRIN_REPO=https://github.com/mimblewimble/grin.git
-ARG GRIN_REF=dbaff34f7751ee23316fbbfe5806b47c546776ca
+ARG GRIN_REPO
+ARG GRIN_REF
 
 FROM ubuntu:24.04 AS builder-grin
 
@@ -27,7 +27,8 @@ WORKDIR /build/grin
 RUN git init . && \
     git remote add origin "${GRIN_REPO}" && \
     git fetch --depth 1 origin "${GRIN_REF}" && \
-    git checkout --detach FETCH_HEAD
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "$GRIN_REF"
 
 RUN cargo build -p grin --release --locked && \
     strip target/release/grin && \
