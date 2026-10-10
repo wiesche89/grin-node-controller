@@ -55,17 +55,18 @@ jobs:
           done
           echo "networks=$networks" >> "$GITHUB_OUTPUT"
 
-  build:
+  components:
     needs: release
     if: needs.release.outputs.networks != '[]'
     strategy:
       fail-fast: false
       matrix:
         network: ${{ fromJSON(needs.release.outputs.networks) }}
+        component: [grin, grinpp, controller]
         platform:
           - {arch: amd64, runner: ubuntu-24.04}
           - {arch: arm64, runner: ubuntu-24.04-arm}
-    name: ${{ matrix.network }} / ${{ matrix.platform.arch }}
+    name: ${{ matrix.network }} / ${{ matrix.platform.arch }} / ${{ matrix.component }}
     runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +76,7 @@ jobs:
           NETWORK: ${{ matrix.network }}
         run: echo "config=$(jq -c --arg network "$NETWORK" '.[$network]' releases.json)" >> "$GITHUB_OUTPUT"
       - name: Checkout controller source
+        if: matrix.component == 'controller'
         uses: actions/checkout@v4
         with:
           repository: ${{ fromJSON(steps.source.outputs.config).controller.repository }}
@@ -87,6 +89,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build Rust node
+        if: matrix.component == 'grin'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -100,6 +103,7 @@ jobs:
           cache-from: type=gha,scope=grin-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
           cache-to: type=gha,mode=max,scope=grin-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
       - name: Build Grin++ node
+        if: matrix.component == 'grinpp'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -114,6 +118,7 @@ jobs:
           cache-from: type=gha,scope=grinpp-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
           cache-to: type=gha,mode=max,scope=grinpp-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
       - name: Build controller
+        if: matrix.component == 'controller'
         uses: docker/build-push-action@v6
         with:
           context: controller-source
@@ -123,6 +128,30 @@ jobs:
           tags: wiesche89/grin-node-controller-builder:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=controller-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=controller-${{ matrix.platform.arch }}
+
+  runtime:
+    needs: [release, components]
+    strategy:
+      fail-fast: false
+      matrix:
+        network: ${{ fromJSON(needs.release.outputs.networks) }}
+        platform:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    name: ${{ matrix.network }} / ${{ matrix.platform.arch }} / runtime
+    runs-on: ${{ matrix.platform.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read source config
+        id: source
+        env:
+          NETWORK: ${{ matrix.network }}
+        run: echo "config=$(jq -c --arg network "$NETWORK" '.[$network]' releases.json)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Assemble runtime
         uses: docker/build-push-action@v6
         with:
@@ -152,7 +181,7 @@ jobs:
         run: docker push "$IMAGE"
 
   publish:
-    needs: [release, build]
+    needs: [release, runtime]
     strategy:
       fail-fast: false
       matrix:
