@@ -2,7 +2,7 @@ name: Build runtime releases
 
 on:
   push:
-    tags: ['mainnet-v*', 'testnet-v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,59 +14,67 @@ concurrency:
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.release.outputs.version }}
-      network: ${{ steps.release.outputs.network }}
-      sources: ${{ steps.release.outputs.sources }}
+      releases: ${{ steps.release.outputs.releases }}
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Read release config
         id: release
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
         run: |
-          if [[ "$REF_TYPE" != tag || ! "$RELEASE_TAG" =~ ^(mainnet|testnet)-(v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "Expected a mainnet-vX.Y.Z or testnet-vX.Y.Z tag."
-            exit 1
-          fi
-          network="${BASH_REMATCH[1]}"
-          release=$(jq -ce --arg network "$network" '.[$network]' releases.json)
           jq -e '
-            (.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
-            ([.controller, .grin, .grinpp] | all(.[];
-              (.repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
-              (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
-              (.commit | test("^[0-9a-f]{40}$"))
-            ))
-          ' <<< "$release" > /dev/null
-          version=$(jq -r '.version' <<< "$release")
-          if [[ "$RELEASE_TAG" != "$network-$version" ]]; then
-            echo "Release tag does not match releases.json."
-            exit 1
-          fi
-          echo "network=$network" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "sources=$release" >> "$GITHUB_OUTPUT"
+            (keys == ["mainnet", "testnet"]) and
+            ([.[].version] | length == (unique | length)) and
+            all(.[];
+              (.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+              ([.controller, .grin, .grinpp] | all(.[];
+                (.repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+                (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+                (.commit | test("^[0-9a-f]{40}$"))
+              ))
+            )
+          ' releases.json > /dev/null
+          releases='[]'
+          for network in mainnet testnet; do
+            source=$(jq -c --arg network "$network" '.[$network]' releases.json)
+            version=$(jq -r '.version' <<< "$source")
+            image="wiesche89/grin-node-runtime:$version"
+            if docker manifest inspect "$image" > /dev/null 2> registry-error.txt; then
+              echo "Skipping published release $image"
+            elif grep -Eq 'no such manifest:|manifest unknown' registry-error.txt; then
+              releases=$(jq -c --arg network "$network" --argjson source "$source" \
+                '. + [{network: $network, source: $source}]' <<< "$releases")
+            else
+              cat registry-error.txt >&2
+              exit 1
+            fi
+          done
+          echo "releases=$releases" >> "$GITHUB_OUTPUT"
 
   build:
     needs: release
+    if: needs.release.outputs.releases != '[]'
     strategy:
       fail-fast: false
       matrix:
+        release: ${{ fromJSON(needs.release.outputs.releases) }}
         platform:
           - {arch: amd64, runner: ubuntu-24.04}
           - {arch: arm64, runner: ubuntu-24.04-arm}
-    name: ${{ needs.release.outputs.network }} / ${{ matrix.platform.arch }}
+    name: ${{ matrix.release.network }} / ${{ matrix.platform.arch }}
     runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Checkout controller source
         uses: actions/checkout@v4
         with:
-          repository: ${{ fromJSON(needs.release.outputs.sources).controller.repository }}
-          ref: ${{ fromJSON(needs.release.outputs.sources).controller.commit }}
+          repository: ${{ matrix.release.source.controller.repository }}
+          ref: ${{ matrix.release.source.controller.commit }}
           path: controller-source
           persist-credentials: false
       - uses: docker/setup-buildx-action@v3
@@ -74,14 +82,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Check release tag is unused
-        env:
-          RELEASE: ${{ needs.release.outputs.version }}
-        run: |
-          if docker buildx imagetools inspect "wiesche89/grin-node-runtime:$RELEASE" >/dev/null 2>&1; then
-            echo "Release $RELEASE already exists; choose a new version."
-            exit 1
-          fi
       - name: Build Rust node
         uses: docker/build-push-action@v6
         with:
@@ -89,12 +89,12 @@ jobs:
           file: Dockerfile.grin
           platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: wiesche89/grin-builder:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: wiesche89/grin-builder:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
-            GRIN_REPO=https://github.com/${{ fromJSON(needs.release.outputs.sources).grin.repository }}.git
-            GRIN_REF=${{ fromJSON(needs.release.outputs.sources).grin.commit }}
-          cache-from: type=gha,scope=grin-${{ matrix.platform.arch }}-${{ needs.release.outputs.version }}
-          cache-to: type=gha,mode=max,scope=grin-${{ matrix.platform.arch }}-${{ needs.release.outputs.version }}
+            GRIN_REPO=https://github.com/${{ matrix.release.source.grin.repository }}.git
+            GRIN_REF=${{ matrix.release.source.grin.commit }}
+          cache-from: type=gha,scope=grin-${{ matrix.platform.arch }}-${{ matrix.release.source.version }}
+          cache-to: type=gha,mode=max,scope=grin-${{ matrix.platform.arch }}-${{ matrix.release.source.version }}
       - name: Build Grin++ node
         uses: docker/build-push-action@v6
         with:
@@ -102,13 +102,13 @@ jobs:
           file: Dockerfile.grinpp
           platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: wiesche89/grinpp-builder:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: wiesche89/grinpp-builder:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
-            GRINPP_REPO=https://github.com/${{ fromJSON(needs.release.outputs.sources).grinpp.repository }}.git
-            GRINPP_REF=${{ fromJSON(needs.release.outputs.sources).grinpp.commit }}
-            GRINPP_VERSION=${{ fromJSON(needs.release.outputs.sources).grinpp.version }}
-          cache-from: type=gha,scope=grinpp-${{ matrix.platform.arch }}-${{ needs.release.outputs.version }}
-          cache-to: type=gha,mode=max,scope=grinpp-${{ matrix.platform.arch }}-${{ needs.release.outputs.version }}
+            GRINPP_REPO=https://github.com/${{ matrix.release.source.grinpp.repository }}.git
+            GRINPP_REF=${{ matrix.release.source.grinpp.commit }}
+            GRINPP_VERSION=${{ matrix.release.source.grinpp.version }}
+          cache-from: type=gha,scope=grinpp-${{ matrix.platform.arch }}-${{ matrix.release.source.version }}
+          cache-to: type=gha,mode=max,scope=grinpp-${{ matrix.platform.arch }}-${{ matrix.release.source.version }}
       - name: Build controller
         uses: docker/build-push-action@v6
         with:
@@ -116,7 +116,7 @@ jobs:
           file: Dockerfile.controller
           platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: wiesche89/grin-node-controller-builder:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: wiesche89/grin-node-controller-builder:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=controller-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=controller-${{ matrix.platform.arch }}
       - name: Assemble runtime
@@ -127,16 +127,16 @@ jobs:
           target: runtime
           platforms: linux/${{ matrix.platform.arch }}
           load: true
-          tags: wiesche89/grin-node-runtime:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: wiesche89/grin-node-runtime:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
-            CONTROLLER_IMAGE=wiesche89/grin-node-controller-builder:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-            GRIN_IMAGE=wiesche89/grin-builder:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-            GRINPP_IMAGE=wiesche89/grinpp-builder:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+            CONTROLLER_IMAGE=wiesche89/grin-node-controller-builder:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+            GRIN_IMAGE=wiesche89/grin-builder:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+            GRINPP_IMAGE=wiesche89/grinpp-builder:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Check runtime
         env:
-          IMAGE: wiesche89/grin-node-runtime:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          CONTROLLER_VERSION: ${{ fromJSON(needs.release.outputs.sources).controller.version }}
-          GRIN_VERSION: ${{ fromJSON(needs.release.outputs.sources).grin.version }}
+          IMAGE: wiesche89/grin-node-runtime:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          CONTROLLER_VERSION: ${{ matrix.release.source.controller.version }}
+          GRIN_VERSION: ${{ matrix.release.source.grin.version }}
         run: |
           docker run --rm --network none --entrypoint /opt/nodes/grin-rust/grin "$IMAGE" --version | grep -F "$GRIN_VERSION"
           docker run --rm --network none "$IMAGE" --version | grep -Fx "grin-node-controller $CONTROLLER_VERSION"
@@ -144,11 +144,15 @@ jobs:
           python3 tests/auth.py --image "$IMAGE"
       - name: Push checked runtime
         env:
-          IMAGE: wiesche89/grin-node-runtime:${{ needs.release.outputs.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          IMAGE: wiesche89/grin-node-runtime:${{ matrix.release.source.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: docker push "$IMAGE"
 
   publish:
     needs: [release, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ${{ fromJSON(needs.release.outputs.releases) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: docker/setup-buildx-action@v3
@@ -158,7 +162,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Publish multi-arch runtime
         env:
-          IMAGE: wiesche89/grin-node-runtime:${{ needs.release.outputs.version }}
+          IMAGE: wiesche89/grin-node-runtime:${{ matrix.release.source.version }}
           RUN: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           docker buildx imagetools create --tag "$IMAGE" "$IMAGE-amd64-$RUN" "$IMAGE-arm64-$RUN"

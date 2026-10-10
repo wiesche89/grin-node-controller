@@ -156,12 +156,12 @@ That means:
 
 ## Releases
 
-`releases.json` sets the runtime version and the repository, version and commit
-for the controller, Rust Grin and Grin++. Commit controller changes first.
+`releases.json` defines runtime versions and source repositories, versions and commits.
+Push to `main` to build new releases. Published versions are skipped.
+Manual runs also use `main`.
 
-Push a matching `mainnet-<version>` or `testnet-<version>` tag to release.
-Manual CI runs use the same tags. All source commits must be pushed first.
-CI builds and checks amd64 and arm64 before publishing the runtime.
+For controller changes, commit the code and update its hash in `releases.json`.
+Push both commits together. CI checks amd64 and arm64 before publishing.
 
 ## Notes
 
