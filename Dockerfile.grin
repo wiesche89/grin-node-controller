@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
-ARG GRIN_REPO=https://github.com/wiesche89/grin.git
-ARG GRIN_REF=master
+ARG GRIN_REPO=https://github.com/mimblewimble/grin.git
+ARG GRIN_REF=dbaff34f7751ee23316fbbfe5806b47c546776ca
 
 FROM ubuntu:24.04 AS builder-grin
 
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libncurses-dev libncursesw6 \
  && rm -rf /var/lib/apt/lists/*
 
-ENV RUST_VERSION=stable
+ARG RUST_VERSION=stable
 RUN set -eux; \
     curl -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
     sh /tmp/rustup.sh -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}"; \
@@ -24,10 +24,12 @@ RUN set -eux; \
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /build/grin
-RUN git clone --single-branch "${GRIN_REPO}" . && \
-    git checkout "${GRIN_REF}"
+RUN git init . && \
+    git remote add origin "${GRIN_REPO}" && \
+    git fetch --depth 1 origin "${GRIN_REF}" && \
+    git checkout --detach FETCH_HEAD
 
-RUN cargo build -p grin --release && \
+RUN cargo build -p grin --release --locked && \
     strip target/release/grin && \
     install -D -m 0755 target/release/grin /out/grin
 

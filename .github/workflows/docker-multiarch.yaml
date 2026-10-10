@@ -1,36 +1,112 @@
-name: Build & Push Multi-Arch Docker Image
+name: Build Rust runtime releases
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-runtime-release
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+        release:
+          - network: mainnet
+            version: v1.0.1
+            ref: dbaff34f7751ee23316fbbfe5806b47c546776ca
+            base: wiesche89/grin-node-runtime@sha256:fe4782c8868ede08ca917485e96b4b23cfa02ecdf85fcf203f528bfdf0c39821
+          - network: testnet
+            version: v1.2.6
+            ref: 4182d3422175184d723232d23f85ac4ec6990285
+            base: wiesche89/grin-node-runtime@sha256:4ebfa2bdaaf16bda81aedac35202cff97314d5651bffd8d54447d7990723c4d7
+    name: ${{ matrix.release.network }} / ${{ matrix.platform.arch }}
+    runs-on: ${{ matrix.platform.runner }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push multi-arch image
-        uses: docker/build-push-action@v5
+      - name: Check release tag is unused
+        env:
+          RELEASE: ${{ matrix.release.version }}
+        run: |
+          if docker buildx imagetools inspect "wiesche89/grin-node-runtime:$RELEASE" >/dev/null 2>&1; then
+            echo "Release $RELEASE already exists; choose a new version."
+            exit 1
+          fi
+      - name: Build Rust node
+        uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.grin
+          platforms: linux/${{ matrix.platform.arch }}
           push: true
-          platforms: linux/amd64,linux/arm64/v8
-          tags: |
-            wiesche89/grin-node-controller:latest
-            wiesche89/grin-node-controller:${{ github.ref_name }}
-            wiesche89/grin-node-controller:${{ github.sha }}
+          tags: wiesche89/grin-builder:${{ matrix.release.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            GRIN_REF=${{ matrix.release.ref }}
+          cache-from: type=gha,scope=grin-${{ matrix.platform.arch }}-${{ matrix.release.version }}
+          cache-to: type=gha,mode=max,scope=grin-${{ matrix.platform.arch }}-${{ matrix.release.version }}
+      - name: Assemble runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.runtime
+          target: rust-update
+          platforms: linux/${{ matrix.platform.arch }}
+          load: true
+          tags: wiesche89/grin-node-runtime:${{ matrix.release.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            GRIN_IMAGE=wiesche89/grin-builder:${{ matrix.release.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+            BASE_RUNTIME=${{ matrix.release.base }}
+      - name: Check runtime
+        env:
+          IMAGE: wiesche89/grin-node-runtime:${{ matrix.release.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          BASE: ${{ matrix.release.base }}
+        run: |
+          docker run --rm --network none --entrypoint /opt/nodes/grin-rust/grin "$IMAGE" --version
+          docker run --rm --network none --entrypoint sha256sum "$BASE" /opt/app/grin-node-controller /opt/nodes/grinpp/grin > expected.txt
+          docker run --rm --network none --entrypoint sha256sum "$IMAGE" /opt/app/grin-node-controller /opt/nodes/grinpp/grin > actual.txt
+          diff -u expected.txt actual.txt
+          docker run -d --network none --name runtime-check "$IMAGE"
+          trap 'docker rm -f runtime-check' EXIT
+          for attempt in $(seq 1 15); do
+            if docker exec runtime-check curl -fsS -o /dev/null http://127.0.0.1:8080/status; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - name: Push checked runtime
+        env:
+          IMAGE: wiesche89/grin-node-runtime:${{ matrix.release.version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: docker push "$IMAGE"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        version: [v1.0.1, v1.2.6]
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish multi-arch runtime
+        env:
+          IMAGE: wiesche89/grin-node-runtime:${{ matrix.version }}
+          RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          docker buildx imagetools create --tag "$IMAGE" "$IMAGE-amd64-$RUN" "$IMAGE-arm64-$RUN"
+          docker buildx imagetools inspect "$IMAGE"

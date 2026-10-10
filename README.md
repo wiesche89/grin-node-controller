@@ -40,7 +40,7 @@ Example:
 Important:
 
 - A runtime tag represents a deliberately tested combination.
-- Mainnet and testnet use the same runtime image.
+- Mainnet and testnet can use different runtime versions.
 - Network-specific behavior is configured in Umbrel via environment variables and volumes, not via separate Dockerfiles.
 
 ## Build prerequisites
@@ -128,7 +128,7 @@ If you want to build the runtime image locally instead of pulling it, uncomment 
 
 ## Umbrel usage
 
-This repo builds one shared runtime image for both Umbrel apps:
+This repo builds the runtime images for both Umbrel apps:
 
 - `grin-node`
 - `grin-node-testnet`
@@ -145,8 +145,20 @@ The difference between mainnet and testnet belongs in the Umbrel app configurati
 That means:
 
 - no separate `Dockerfile-testnet`
-- no separate testnet runtime image
-- one tested runtime image, two different Umbrel app configurations
+- separate runtime versions for release and staging
+- network settings in the Umbrel app configurations
+
+## Rust updates
+
+| Network | Umbrel app | Runtime | Grin |
+| --- | --- | --- | --- |
+| Mainnet | 0.2.7 | v1.0.1 | v5.5.2 (`dbaff34f`) |
+| Testnet | 0.2.26 | v1.2.6 | staging (`4182d342`) |
+
+The workflow pins these commits and builds amd64 and arm64 images when started
+manually. The `rust-update` target in `Dockerfile.runtime` replaces only Rust
+Grin; controller and Grin++ stay unchanged. Publish the Umbrel app updates after
+the images have been built and tested.
 
 ## Notes
 
