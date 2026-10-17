@@ -12,6 +12,9 @@ import tempfile
 import threading
 import time
 
+protected = '--auth' in sys.argv[2:]
+controller_password = 'controller-test-password'
+controller_auth = 'Basic ' + base64.b64encode(('grin:' + controller_password).encode()).decode()
 key = 'node-test-key'
 expected = 'Basic ' + base64.b64encode(('grin:' + key).encode()).decode()
 received = []
@@ -40,13 +43,15 @@ with tempfile.TemporaryDirectory() as directory:
     env = dict(os.environ, HOME=directory, GRIN_RUST_DATADIR=directory,
                GRINPP_DATADIR=directory)
     env.pop('CONTROLLER_PASSWORD', None)
+    if protected:
+        env['CONTROLLER_PASSWORD'] = controller_password
     process = subprocess.Popen([
         os.path.abspath(sys.argv[1]), '--port', str(port),
         '--node-port', str(node.server_port), '--rust-bin', '/bin/sleep',
         '--rust-args', '60', '--grinpp-bin', '/nonexistent',
     ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def request(method, path, auth=None):
+    def request(method, path, auth=controller_auth if protected else None):
         conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
         try:
             conn.request(method, path, '{}', {'Authorization': auth} if auth else {})
@@ -65,12 +70,22 @@ with tempfile.TemporaryDirectory() as directory:
                 time.sleep(0.1)
         else:
             raise AssertionError('Controller did not start')
+        if protected:
+            assert request('GET', '/status', None) == 401
+            assert request('POST', '/start/rust', expected) == 401
         assert request('POST', '/start/rust') == 200
-        for auth in [None, 'Basic invalid', expected]:
+        for auth in [None, 'Basic invalid', controller_auth, expected]:
             assert request('POST', '/wallet/v2/foreign', auth) == (200 if auth == expected else 401)
             assert received[-1] == ('/v2/foreign', auth)
         assert request('POST', '/v2/foreign') == 200
         assert received[-1] == ('/v2/foreign', expected)
+        if protected:
+            count = len(received)
+            for path in ['/wallet/v2/foreign/',
+                         '/wallet/v2/owner', '/v2/owner', '/delete/rust', '/status']:
+                assert request('POST', path, expected) == 401, path
+            assert request('GET', '/wallet/v2/foreign', expected) == 401
+            assert len(received) == count
         count = len(received)
         for method, path in [('GET', '/wallet/v2/foreign'),
                              ('POST', '/wallet/v2/owner'), ('POST', '/wallet/delete/rust')]:

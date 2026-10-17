@@ -168,12 +168,29 @@ Push both commits together. CI checks amd64 and arm64 before publishing.
 - The legacy monolithic `Dockerfile` is no longer the preferred build path.
 - `Dockerfile.grinpp` includes the current `libsodium` hash workaround required by the upstream Grin++ vcpkg overlay port.
 
-## Umbrel access
+## Authentication
 
-Set `CONTROLLER_PASSWORD` and start with `--require-auth`.
-API requests use Basic auth with username `grin`.
+Set `CONTROLLER_PASSWORD` and start with `--require-auth`. Management requests
+use Basic auth with username `grin`. On Umbrel, nginx supplies these credentials
+after checking the app-proxy IP; no additional user login is needed.
 
-Test a binary: `python3 tests/auth.py /path/to/grin-node-controller`.
-Test an image: `python3 tests/auth.py --image <image>`.
+POST `/wallet/v2/foreign` uses the caller's node credentials instead.
+Other routes remain protected; OPTIONS preflight is unauthenticated.
+
+```sh
+python3 tests/auth.py /path/to/grin-node-controller
+python3 tests/auth.py --image <image>
+python3 tests/wallet_proxy.py /path/to/grin-node-controller
+python3 tests/wallet_proxy.py /path/to/grin-node-controller --auth
+```
+
+For local review, build `Dockerfile.controller` as
+`grin-node-controller-builder:auth-review`. Copy its `/out/grin-node-controller`
+into the pinned runtime bases as `/opt/app/grin-node-controller`; tag them
+`grin-node-runtime:auth-review-mainnet` and `grin-node-runtime:auth-review-testnet`.
+Build the UI as `grin-node-ui:auth-review`.
+
+Before publishing, update the source commit and versions in `releases.json`,
+then pin the new image digests in both Umbrel stores.
 
 Source: Apache-2.0. Dependencies retain their own licenses.

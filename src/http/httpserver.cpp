@@ -94,6 +94,12 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
         return;
     }
 
+    // Wallets authenticate with the node; never inject its stored key.
+    if (r.method == "POST" && r.path == "/wallet/v2/foreign") {
+        handleForeignProxy(s, r, false);
+        return;
+    }
+
     const QByteArray password = qgetenv("CONTROLLER_PASSWORD");
     if (qEnvironmentVariableIsSet("CONTROLLER_PASSWORD")) {
         const QByteArray expected = "Basic " + (QByteArray("grin:") + password).toBase64();
@@ -155,10 +161,6 @@ void HttpServer::routeRequest(QTcpSocket *s, const Request &r)
         return;
     }
 
-    if (r.method == "POST" && path == "/wallet/v2/foreign") {
-        handleForeignProxy(s, r, false);
-        return;
-    }
 
     ///delete/{id} (POST)  -> z.B. /delete/rust oder /delete/grinpp
     if (r.method == "POST" && path.startsWith("/delete/")) {
