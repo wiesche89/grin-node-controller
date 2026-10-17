@@ -1,10 +1,10 @@
 {
   "mainnet": {
-    "version": "v1.0.4",
+    "version": "v1.0.5",
     "controller": {
       "repository": "wiesche89/grin-node-controller",
-      "version": "0.0.3",
-      "commit": "afd42483e5763a60c874e73010b859381ef67ff4"
+      "version": "0.0.4",
+      "commit": "eed5f1295521c690499177674cffcd3c79f231ee"
     },
     "grin": {
       "repository": "mimblewimble/grin",
@@ -18,11 +18,11 @@
     }
   },
   "testnet": {
-    "version": "v1.2.9",
+    "version": "v1.2.10",
     "controller": {
       "repository": "wiesche89/grin-node-controller",
-      "version": "0.0.3",
-      "commit": "afd42483e5763a60c874e73010b859381ef67ff4"
+      "version": "0.0.4",
+      "commit": "eed5f1295521c690499177674cffcd3c79f231ee"
     },
     "grin": {
       "repository": "mimblewimble/grin",
