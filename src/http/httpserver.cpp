@@ -67,17 +67,44 @@ void HttpServer::onNewConnection()
 {
     while (QTcpSocket *s = m_server.nextPendingConnection()) {
         s->setParent(this);
-
-        Request r;
-        bool ok = readHttpRequest(s, r);
-
-        if (!ok) {
-            writeBadRequest(s);
-            s->disconnectFromHost();
-            continue;
-        }
-        routeRequest(s, r);
-        s->disconnectFromHost();
+        connect(s, &QTcpSocket::disconnected, s, &QObject::deleteLater);
+        auto *deadline = new QTimer(s);
+        deadline->setSingleShot(true);
+        connect(deadline, &QTimer::timeout, s, [s] { s->abort(); });
+        deadline->start(10000);
+        connect(s, &QTcpSocket::readyRead, this, [this, s, deadline, data = QByteArray()]() mutable {
+            data += s->readAll();
+            const int end = data.indexOf("\r\n\r\n");
+            if (data.size() > 1024 * 1024) {
+                s->abort();
+                return;
+            }
+            if (end < 0)
+                return;
+            qint64 length = 0;
+            for (const auto &line : data.left(end).split('\n')) {
+                if (line.toLower().startsWith("content-length:")) {
+                    bool ok = false;
+                    length = line.mid(15).trimmed().toLongLong(&ok);
+                    if (!ok || length < 0 || length > 1024 * 1024) {
+                        s->abort();
+                        return;
+                    }
+                }
+            }
+            if (data.size() - end - 4 < length)
+                return;
+            deadline->stop();
+            disconnect(s, &QTcpSocket::readyRead, this, nullptr);
+            Request r;
+            if (!readHttpRequest(data.left(end + 4 + length), r)) {
+                writeBadRequest(s);
+            } else {
+                routeRequest(s, r);
+            }
+            if (!s->property("proxyPending").toBool())
+                s->disconnectFromHost();
+        });
     }
 }
 
@@ -516,43 +543,15 @@ QMap<QByteArray, QByteArray> HttpServer::parseQuery(const QByteArray &rawQuery)
  * @param outReq
  * @return
  */
-bool HttpServer::readHttpRequest(QTcpSocket *s, Request &outReq)
+bool HttpServer::readHttpRequest(const QByteArray &data, Request &outReq)
 {
     bool log = false;
 
-    // Wait for header
-    if (!s->waitForReadyRead(5000)) {
+    const int headerEnd = data.indexOf("\r\n\r\n");
+    if (headerEnd < 0)
         return false;
-    }
-
-    QByteArray data = s->readAll();
-
-    int headerEnd = data.indexOf("\r\n\r\n");
-    const int headerEndAlt = data.indexOf("\n\n");
-    if (headerEnd < 0 && headerEndAlt >= 0) {
-        headerEnd = headerEndAlt + 2; // Fallback
-    }
-    if (headerEnd < 0) {
-        while (headerEnd < 0 && s->waitForReadyRead(2000)) {
-            data += s->readAll();
-            headerEnd = data.indexOf("\r\n\r\n");
-            if (headerEnd < 0) {
-                int he2 = data.indexOf("\n\n");
-                if (he2 >= 0) {
-                    headerEnd = he2 + 2;
-                }
-            }
-        }
-        if (headerEnd < 0) {
-            return false;
-        }
-    }
-
-    QByteArray head = data.left(headerEnd);
-    QByteArray body = data.mid(headerEnd + 4);
-    if (data.mid(headerEnd, 4) == "\n\n") {
-        body = data.mid(headerEnd);
-    }
+    const QByteArray head = data.left(headerEnd);
+    const QByteArray body = data.mid(headerEnd + 4);
     const QList<QByteArray> lines = head.split('\n');
     if (lines.isEmpty()) {
         return false;
@@ -591,22 +590,7 @@ bool HttpServer::readHttpRequest(QTcpSocket *s, Request &outReq)
     outReq.path = rawPath;
     outReq.query = parseQuery(rawQuery);
 
-    // Body with Content-Length
-    int contentLen = 0;
-    bool okLen = false;
-    if (outReq.headers.contains("content-length")) {
-        contentLen = outReq.headers.value("content-length").toInt(&okLen);
-    }
-    QByteArray buf = body;
-    if (okLen && contentLen > buf.size()) {
-        int remain = contentLen - buf.size();
-        while (remain > 0 && s->waitForReadyRead(3000)) {
-            QByteArray chunk = s->read(qMin(8192, remain));
-            buf += chunk;
-            remain -= chunk.size();
-        }
-    }
-    outReq.body = buf;
+    outReq.body = body;
 
     if (log) {
         qDebug() << "Request:";
@@ -759,7 +743,6 @@ void HttpServer::handleForeignProxy(QTcpSocket *s, const Request &r, bool useNod
 
 void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r, const QString &apiKey)
 {
-    QNetworkAccessManager mgr;
     QNetworkRequest req{ QUrl(url) };
 
     // Content-Type übernehmen oder Default setzen
@@ -784,22 +767,24 @@ void HttpServer::proxyToUrl(QTcpSocket *s, const QString &url, const Request &r,
         }
     }
 
-    QNetworkReply *reply = mgr.post(req, r.body);
-    QEventLoop loop;
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    loop.exec();
-
-    int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    if (status == 0) {
-        qWarning() << "[proxy]" << url << "network error:"
-                   << reply->error() << reply->errorString();
-        status = 500;
-    }
-
-    const QByteArray payload = reply->readAll();
-    reply->deleteLater();
-
-    writeJsonRaw(s, status, payload);
+    s->setProperty("proxyPending", true);
+    QNetworkReply *reply = m_proxyNetwork.post(req, r.body);
+    QTimer::singleShot(15000, reply, [reply] {
+        if (!reply->isFinished())
+            reply->abort();
+    });
+    connect(s, &QTcpSocket::disconnected, reply, &QNetworkReply::abort);
+    const QPointer<QTcpSocket> socket(s);
+    connect(reply, &QNetworkReply::finished, this, [this, socket, reply] {
+        int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status == 0)
+            status = 500;
+        if (socket && socket->state() == QAbstractSocket::ConnectedState) {
+            writeJsonRaw(socket, status, reply->readAll());
+            socket->disconnectFromHost();
+        }
+        reply->deleteLater();
+    });
 }
 
 QString HttpServer::proxyEndpointUrl(const QString &endpoint) const

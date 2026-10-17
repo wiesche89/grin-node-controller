@@ -27,31 +27,18 @@ bool GrinRustNode::stop(int gracefulMs)
         return true;
     }
 
-    // 1) Sanft: "q\n" auf stdin
+#ifdef Q_OS_WIN
     if (p->isWritable()) {
         p->write("q\n");
-        p->waitForBytesWritten(1000);  // 1 Sekunde reicht völlig
+        p->waitForBytesWritten(1000);
     }
-    if (p->waitForFinished(gracefulMs)) {
+    if (p->waitForFinished(gracefulMs))
         return true;
-    }
-
-#ifdef Q_OS_WIN
-    // 2) Windows: terminate() (Rust-Node reagiert meist)
+#endif
+    // Headless Grin handles SIGTERM; stdin is only used by the TUI.
     p->terminate();
-    if (p->waitForFinished(1500)) {
+    if (p->waitForFinished(gracefulMs))
         return true;
-    }
     p->kill();
     return p->waitForFinished(3000);
-#else
-    // 2) Unix: SIGTERM, dann SIGKILL
-    ::kill(static_cast<pid_t>(p->processId()), SIGTERM);
-    if (p->waitForFinished(1500)) {
-        return true;
-    }
-
-    ::kill(static_cast<pid_t>(p->processId()), SIGKILL);
-    return p->waitForFinished(3000);
-#endif
 }

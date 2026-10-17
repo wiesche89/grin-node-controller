@@ -19,7 +19,8 @@
 
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
-#include <QEventLoop>
+#include <QTimer>
+#include <QPointer>
 #include <QNetworkReply>
 
 #include "inodecontroller.h"
@@ -50,7 +51,7 @@ private:
     };
 
     // Parsing/IO
-    static bool readHttpRequest(QTcpSocket *s, Request &outReq);
+    static bool readHttpRequest(const QByteArray &data, Request &outReq);
     static void writeJson(QTcpSocket *s, int statusCode, const QJsonObject &obj);
     static void writeNoContentCors(QTcpSocket *s);
     static void writeNotFound(QTcpSocket *s, const QString &msg = QStringLiteral("not found"));
@@ -88,6 +89,7 @@ private:
 
 private:
     QTcpServer m_server;
+    QNetworkAccessManager m_proxyNetwork;
     QMap<QString, INodeController *> m_nodes; // id -> controller
     quint16 m_nodeRpcPort;
 };
