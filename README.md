@@ -158,6 +158,10 @@ That means:
 
 `releases.json` defines runtime versions and source repositories, versions and commits.
 Push to `main` to build new releases. Published versions are skipped.
+Builder images are reused by source, architecture and Dockerfile content.
+Identical components are built once for both networks. Change the component's
+Dockerfile to refresh its build dependencies. Existing run-specific tags are
+not reused; the first release with this workflow builds the components once.
 Manual runs also use `main`.
 
 For controller changes, commit the code and update its hash in `releases.json`.

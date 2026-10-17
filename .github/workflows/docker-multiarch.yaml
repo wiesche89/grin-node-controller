@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       networks: ${{ steps.release.outputs.networks }}
+      components: ${{ steps.release.outputs.components }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -54,6 +55,11 @@ jobs:
             fi
           done
           echo "networks=$networks" >> "$GITHUB_OUTPUT"
+          components=$(jq -c --argjson networks "$networks" '
+            . as $releases | [$networks[] as $network | ["controller", "grin", "grinpp"][] as $component |
+              {component: $component, source: $releases[$network][$component]}] | unique
+          ' releases.json)
+          echo "components=$components" >> "$GITHUB_OUTPUT"
 
   components:
     needs: release
@@ -61,73 +67,89 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        network: ${{ fromJSON(needs.release.outputs.networks) }}
-        component: [grin, grinpp, controller]
+        build: ${{ fromJSON(needs.release.outputs.components) }}
         platform:
           - {arch: amd64, runner: ubuntu-24.04}
           - {arch: arm64, runner: ubuntu-24.04-arm}
-    name: ${{ matrix.network }} / ${{ matrix.platform.arch }} / ${{ matrix.component }}
+    name: ${{ matrix.build.component }} / ${{ matrix.platform.arch }} / ${{ matrix.build.source.version }}
     runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Read source config
-        id: source
-        env:
-          NETWORK: ${{ matrix.network }}
-        run: echo "config=$(jq -c --arg network "$NETWORK" '.[$network]' releases.json)" >> "$GITHUB_OUTPUT"
-      - name: Checkout controller source
-        if: matrix.component == 'controller'
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ fromJSON(steps.source.outputs.config).controller.repository }}
-          ref: ${{ fromJSON(steps.source.outputs.config).controller.commit }}
-          path: controller-source
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Check component image
+        id: image
+        env:
+          COMPONENT: ${{ matrix.build.component }}
+          COMMIT: ${{ matrix.build.source.commit }}
+          ARCH: ${{ matrix.platform.arch }}
+          RECIPE: ${{ hashFiles(format('Dockerfile.{0}', matrix.build.component), '.dockerignore') }}
+        run: |
+          repository="wiesche89/$COMPONENT-builder"
+          [[ "$COMPONENT" != controller ]] || repository=wiesche89/grin-node-controller-builder
+          image="$repository:$COMMIT-$ARCH-$RECIPE"
+          echo "ref=$image" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$image" > /dev/null 2> registry-error.txt; then
+            echo "Reusing $image"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          elif grep -Eq 'no such manifest:|manifest unknown' registry-error.txt; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            cat registry-error.txt >&2
+            exit 1
+          fi
+      - name: Checkout controller source
+        if: steps.image.outputs.build == 'true' && matrix.build.component == 'controller'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.build.source.repository }}
+          ref: ${{ matrix.build.source.commit }}
+          path: controller-source
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+        if: steps.image.outputs.build == 'true'
       - name: Build Rust node
-        if: matrix.component == 'grin'
+        if: steps.image.outputs.build == 'true' && matrix.build.component == 'grin'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.grin
           platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: wiesche89/grin-builder:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: ${{ steps.image.outputs.ref }}
           build-args: |
-            GRIN_REPO=https://github.com/${{ fromJSON(steps.source.outputs.config).grin.repository }}.git
-            GRIN_REF=${{ fromJSON(steps.source.outputs.config).grin.commit }}
-          cache-from: type=gha,scope=grin-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
-          cache-to: type=gha,mode=max,scope=grin-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
+            GRIN_REPO=https://github.com/${{ matrix.build.source.repository }}.git
+            GRIN_REF=${{ matrix.build.source.commit }}
+          cache-from: type=gha,scope=${{ matrix.build.component }}-${{ matrix.platform.arch }}-${{ matrix.build.source.commit }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.build.component }}-${{ matrix.platform.arch }}-${{ matrix.build.source.commit }}
       - name: Build Grin++ node
-        if: matrix.component == 'grinpp'
+        if: steps.image.outputs.build == 'true' && matrix.build.component == 'grinpp'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.grinpp
           platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: wiesche89/grinpp-builder:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          tags: ${{ steps.image.outputs.ref }}
           build-args: |
-            GRINPP_REPO=https://github.com/${{ fromJSON(steps.source.outputs.config).grinpp.repository }}.git
-            GRINPP_REF=${{ fromJSON(steps.source.outputs.config).grinpp.commit }}
-            GRINPP_VERSION=${{ fromJSON(steps.source.outputs.config).grinpp.version }}
-          cache-from: type=gha,scope=grinpp-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
-          cache-to: type=gha,mode=max,scope=grinpp-${{ matrix.platform.arch }}-${{ fromJSON(steps.source.outputs.config).version }}
+            GRINPP_REPO=https://github.com/${{ matrix.build.source.repository }}.git
+            GRINPP_REF=${{ matrix.build.source.commit }}
+            GRINPP_VERSION=${{ matrix.build.source.version }}
+          cache-from: type=gha,scope=${{ matrix.build.component }}-${{ matrix.platform.arch }}-${{ matrix.build.source.commit }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.build.component }}-${{ matrix.platform.arch }}-${{ matrix.build.source.commit }}
       - name: Build controller
-        if: matrix.component == 'controller'
+        if: steps.image.outputs.build == 'true' && matrix.build.component == 'controller'
         uses: docker/build-push-action@v6
         with:
           context: controller-source
           file: Dockerfile.controller
           platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: wiesche89/grin-node-controller-builder:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          cache-from: type=gha,scope=controller-${{ matrix.platform.arch }}
-          cache-to: type=gha,mode=max,scope=controller-${{ matrix.platform.arch }}
+          tags: ${{ steps.image.outputs.ref }}
+          cache-from: type=gha,scope=${{ matrix.build.component }}-${{ matrix.platform.arch }}-${{ matrix.build.source.commit }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.build.component }}-${{ matrix.platform.arch }}-${{ matrix.build.source.commit }}
 
   runtime:
     needs: [release, components]
@@ -162,9 +184,9 @@ jobs:
           load: true
           tags: wiesche89/grin-node-runtime:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
-            CONTROLLER_IMAGE=wiesche89/grin-node-controller-builder:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-            GRIN_IMAGE=wiesche89/grin-builder:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-            GRINPP_IMAGE=wiesche89/grinpp-builder:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+            CONTROLLER_IMAGE=wiesche89/grin-node-controller-builder:${{ fromJSON(steps.source.outputs.config).controller.commit }}-${{ matrix.platform.arch }}-${{ hashFiles('Dockerfile.controller', '.dockerignore') }}
+            GRIN_IMAGE=wiesche89/grin-builder:${{ fromJSON(steps.source.outputs.config).grin.commit }}-${{ matrix.platform.arch }}-${{ hashFiles('Dockerfile.grin', '.dockerignore') }}
+            GRINPP_IMAGE=wiesche89/grinpp-builder:${{ fromJSON(steps.source.outputs.config).grinpp.commit }}-${{ matrix.platform.arch }}-${{ hashFiles('Dockerfile.grinpp', '.dockerignore') }}
       - name: Check runtime
         env:
           IMAGE: wiesche89/grin-node-runtime:${{ fromJSON(steps.source.outputs.config).version }}-${{ matrix.platform.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
